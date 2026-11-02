@@ -9,6 +9,9 @@ jobs:
   build:
     # 钉 24.04：ubuntu-latest 已切 26.04，theos-action 的 apt 依赖（libxml2）装不上
     runs-on: ubuntu-24.04
+    permissions:
+      actions: write
+      contents: read
 
     steps:
     - name: Checkout
