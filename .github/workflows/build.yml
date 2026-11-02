@@ -78,7 +78,10 @@ jobs:
 
     - name: Sign dylib (ldid 伪签名)
       run: |
-        sudo apt-get install -y ldid   # ubuntu 源自带 ldid（theos-action 没放进 PATH）
+        # ubuntu 源没有 ldid 包，用 ProcursusTeam 官方预编译 Linux 版
+        curl -fsSL -o /tmp/ldid https://github.com/ProcursusTeam/ldid/releases/latest/download/ldid_linux_x86_64
+        chmod +x /tmp/ldid
+        sudo mv /tmp/ldid /usr/local/bin/ldid
         ldid -S build_bd/BubbleDeck.dylib
         ldid build_bd/BubbleDeck.dylib || true  # 打印签名信息，非致命
 
