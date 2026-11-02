@@ -1,0 +1,12 @@
+# BubbleDeck 独立仓库
+dist/
+build_bd/
+packs/
+*.log
+*.dylib
+*.ipa
+.DS_Store
+*.swp
+*~
+temp_*
+tmp_*
