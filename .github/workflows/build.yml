@@ -30,13 +30,20 @@ jobs:
         SDK_PATH=$(ls -d "$THEOS"/sdks/iPhoneOS*.sdk | sort -V | tail -1)
         echo "Using SDK: $SDK_PATH"
 
+        # 必须用 Theos 工具链的 clang：链接时它会自动调同目录的 Apple ld64（Mach-O）。
+        # 系统 clang 链接会调 /usr/bin/ld（GNU ELF ld），报 "unrecognized emulation mode: LLVM"
+        TC="$THEOS/toolchain/linux/iphone/bin"
+        [ -x "$TC/clang" ] || TC="$(dirname "$(command -v clang)")"
+        CLANG="$TC/clang"
+        echo "Using clang: $CLANG"
+
         # 自动发现根目录下所有 .m 源文件（新增文件无需修改本 workflow）
         # 排除 .github 与 ./theos（theos-action 把 Theos 装在仓库目录里）
         find . -name '*.m' -type f -not -path './.github/*' -not -path './theos/*' | sort | while read -r f; do
           # 对象文件带路径哈希，避免不同目录同名 .m 互相覆盖
           OBJ_FILE="build_bd/$(echo "$f" | md5sum | cut -c1-8)_$(basename "$f" .m).o"
           echo "Compiling: $f -> $OBJ_FILE"
-          clang -arch arm64 \
+          "$CLANG" -arch arm64 \
                 -isysroot "$SDK_PATH" \
                 -target arm64-apple-ios14.0 \
                 -c \
@@ -56,7 +63,7 @@ jobs:
 
         echo "=== Link all .o into dylib ==="
         # -undefined dynamic_lookup（Theos 标准做法）：微信注入时解析符号，无需链 Framework
-        clang -arch arm64 \
+        "$CLANG" -arch arm64 \
               -isysroot "$SDK_PATH" \
               -target arm64-apple-ios14.0 \
               -dynamiclib \
