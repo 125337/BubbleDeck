@@ -7,19 +7,14 @@ on:
 
 jobs:
   build:
-    runs-on: macos-latest
-    permissions:
-      actions: write
-      contents: read
+    runs-on: ubuntu-latest
 
     steps:
     - name: Checkout
       uses: actions/checkout@v7
 
-    - name: Setup Xcode
-      uses: maxim-lobanov/setup-xcode@v1
-      with:
-        xcode-version: latest-stable
+    - name: Setup Theos
+      uses: Randomblock1/theos-action@v1
 
     - name: Build dylib (arm64)
       run: |
@@ -28,12 +23,13 @@ jobs:
         rm -rf build_bd/
         mkdir -p build_bd
 
-        SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
+        SDK_PATH=$(ls -d "$THEOS"/sdks/iPhoneOS*.sdk | sort -V | tail -1)
+        echo "Using SDK: $SDK_PATH"
 
         # 自动发现根目录下所有 .m 源文件（新增文件无需修改本 workflow；排除 .github）
         find . -name '*.m' -type f -not -path './.github/*' | sort | while read -r f; do
           # 对象文件带路径哈希，避免不同目录同名 .m 互相覆盖
-          OBJ_FILE="build_bd/$(echo "$f" | md5 | cut -c1-8)_$(basename "$f" .m).o"
+          OBJ_FILE="build_bd/$(echo "$f" | md5sum | cut -c1-8)_$(basename "$f" .m).o"
           echo "Compiling: $f -> $OBJ_FILE"
           clang -arch arm64 \
                 -isysroot "$SDK_PATH" \
@@ -54,15 +50,12 @@ jobs:
         done
 
         echo "=== Link all .o into dylib ==="
+        # -undefined dynamic_lookup（Theos 标准做法）：微信注入时解析符号，无需链 Framework
         clang -arch arm64 \
               -isysroot "$SDK_PATH" \
               -target arm64-apple-ios14.0 \
               -dynamiclib \
-              -framework UIKit \
-              -framework Foundation \
-              -framework CoreGraphics \
-              -framework QuartzCore \
-              -lz \
+              -undefined dynamic_lookup \
               -Wl,-S \
               -Wl,-x \
               -o build_bd/BubbleDeck.dylib \
@@ -71,9 +64,10 @@ jobs:
         echo "=== Build successful ==="
         ls -la build_bd/BubbleDeck.dylib
 
-    - name: Sign dylib
+    - name: Sign dylib (ldid 伪签名)
       run: |
-        codesign -f -s - build_bd/BubbleDeck.dylib
+        ldid -S build_bd/BubbleDeck.dylib
+        ldid build_bd/BubbleDeck.dylib
 
     - name: Delete old artifacts
       uses: actions/github-script@v9
