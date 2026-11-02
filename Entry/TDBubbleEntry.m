@@ -149,8 +149,6 @@ static void BDBuildPage(UIViewController *vc) {
 
     CGFloat w = vc.view.bounds.size.width;
     CGFloat h = vc.view.bounds.size.height;
-    CGFloat top = vc.view.safeAreaInsets.top;
-    if (top < 20) top = 64; // safeArea 未就绪兜底
 
     NSArray<NSString *> *packs = [TDConfig availablePacks];
     NSString *active = [TDConfig activePack];
@@ -166,12 +164,12 @@ static void BDBuildPage(UIViewController *vc) {
     if (@available(iOS 13.0, *)) scroll.automaticallyAdjustsScrollIndicatorInsets = NO;
 
     // ── 大标题区 ──
-    UILabel *big = [[UILabel alloc] initWithFrame:CGRectMake(15, top + 6, w - 30, 34)];
+    UILabel *big = [[UILabel alloc] initWithFrame:CGRectMake(15, 6, w - 30, 34)];
     big.font = [UIFont systemFontOfSize:28 weight:UIFontWeightBold];
     big.text = @"BubbleDeck";
     [scroll addSubview:big];
 
-    UILabel *sub = [[UILabel alloc] initWithFrame:CGRectMake(15, top + 44, w - 30, 18)];
+    UILabel *sub = [[UILabel alloc] initWithFrame:CGRectMake(15, 44, w - 30, 18)];
     sub.font = [UIFont systemFontOfSize:13];
     sub.textColor = BDSecondaryText();
     sub.text = packs.count
@@ -179,7 +177,7 @@ static void BDBuildPage(UIViewController *vc) {
         : [NSString stringWithFormat:@"v%@ · 未安装任何气泡包", kTDVersion];
     [scroll addSubview:sub];
 
-    CGFloat y = top + 74;
+    CGFloat y = 74;
     CGFloat wIn = w - 30;
 
     // 首卡：微信默认
@@ -268,6 +266,16 @@ static void BDBuildPage(UIViewController *vc) {
     scroll.contentSize = CGSizeMake(w, y + 32);
 
     [vc.view addSubview:scroll];
+
+    // 方案 B：scroll 四边钉在 safeAreaLayoutGuide 上——导航栏/状态栏/Home 条
+    // 高度全由系统维护，内容从 y=0 起画，无快照、无兜底、无双重计算
+    scroll.translatesAutoresizingMaskIntoConstraints = NO;
+    [NSLayoutConstraint activateConstraints:@[
+        [scroll.topAnchor      constraintEqualToAnchor:vc.view.safeAreaLayoutGuide.topAnchor],
+        [scroll.bottomAnchor   constraintEqualToAnchor:vc.view.safeAreaLayoutGuide.bottomAnchor],
+        [scroll.leadingAnchor  constraintEqualToAnchor:vc.view.safeAreaLayoutGuide.leadingAnchor],
+        [scroll.trailingAnchor constraintEqualToAnchor:vc.view.safeAreaLayoutGuide.trailingAnchor],
+    ]];
 }
 
 // ────── 交互处理（注册在类对上的实例方法） ──────
