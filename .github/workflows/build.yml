@@ -78,13 +78,9 @@ jobs:
 
     - name: Sign dylib (ldid 伪签名)
       run: |
-        # ldid 优先取 $THEOS/bin/，没有就用系统的，再没有就 apt 装
-        if [ ! -x "$THEOS/bin/ldid" ] && ! command -v ldid >/dev/null 2>&1; then
-          sudo apt-get install -y ldid
-        fi
-        if [ -x "$THEOS/bin/ldid" ]; then LDID="$THEOS/bin/ldid"; else LDID="ldid"; fi
-        "$LDID" -S build_bd/BubbleDeck.dylib
-        "$LDID" build_bd/BubbleDeck.dylib || true  # 打印签名信息，非致命
+        sudo apt-get install -y ldid   # ubuntu 源自带 ldid（theos-action 没放进 PATH）
+        ldid -S build_bd/BubbleDeck.dylib
+        ldid build_bd/BubbleDeck.dylib || true  # 打印签名信息，非致命
 
     - name: Delete old artifacts
       uses: actions/github-script@v9
