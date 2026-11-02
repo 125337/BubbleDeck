@@ -362,6 +362,9 @@ static void bdEntryViewWillDisappear(id self, SEL _cmd, BOOL animated) {
     dispatch_once(&onceToken, ^{
         TDLog(@"DEV", @"TDBubbleEntry install: 气泡 hook + 插件页入口");
 
+        // 启动时包列表锚点（排查 Documents 被外部清理的时间点用）
+        TDLog(@"DEV", @"[Pack] install 时已安装: %@", [TDConfig availablePacks]);
+
         // 1. 气泡引擎 hook
         [TDBubbleEngine installHooks];
 

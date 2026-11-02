@@ -27,6 +27,22 @@
 static UIImage *(*g_orig_MMImageNamed)(id, SEL, NSString *);
 static UIImage *(*g_orig_MMImageNamedWarn)(id, SEL, NSString *, BOOL);
 
+// ── 亮暗状态缓存 ──
+// UIScreen.traitCollection 是 UIKit API，只能在主线程调。微信在分享/文件导入等流程
+// 会从后台线程走取图口，后台线程直接查会崩（实测闪退）。策略：主线程调用时顺手刷新
+// 缓存；后台线程用最近一次主线程缓存值（首查前默认亮色）。
+static BOOL s_darkKnown = NO;
+static BOOL s_dark = NO;
+
++ (BOOL)currentDarkState {
+    if ([NSThread isMainThread]) {
+        s_dark = [UIScreen mainScreen].traitCollection.userInterfaceStyle == UIUserInterfaceStyleDark;
+        s_darkKnown = YES;
+        return s_dark;
+    }
+    return s_darkKnown ? s_dark : NO;
+}
+
 @implementation TDBubbleEngine
 
 // ── 图片缓存 ──────────────────────────────────────────────────────────────────
@@ -82,7 +98,7 @@ static NSCache<NSString *, NSNull *>  *s_negCache = nil;   // key: 请求名（�
     if (ext.length) stem = [stem stringByDeletingPathExtension];
 
     // ②③ 组装候选：暗屏先 _Dark 变体再亮色；每档 @3x → @2x → 裸 png
-    BOOL dark = [UIScreen mainScreen].traitCollection.userInterfaceStyle == UIUserInterfaceStyleDark;
+    BOOL dark = [self currentDarkState];
     NSMutableArray<NSString *> *stems = [NSMutableArray array];
     if (dark && ![stem hasSuffix:@"_Dark"]) [stems addObject:[stem stringByAppendingString:@"_Dark"]];
     [stems addObject:stem];
