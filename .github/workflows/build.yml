@@ -30,8 +30,9 @@ jobs:
         SDK_PATH=$(ls -d "$THEOS"/sdks/iPhoneOS*.sdk | sort -V | tail -1)
         echo "Using SDK: $SDK_PATH"
 
-        # 自动发现根目录下所有 .m 源文件（新增文件无需修改本 workflow；排除 .github）
-        find . -name '*.m' -type f -not -path './.github/*' | sort | while read -r f; do
+        # 自动发现根目录下所有 .m 源文件（新增文件无需修改本 workflow）
+        # 排除 .github 与 ./theos（theos-action 把 Theos 装在仓库目录里）
+        find . -name '*.m' -type f -not -path './.github/*' -not -path './theos/*' | sort | while read -r f; do
           # 对象文件带路径哈希，避免不同目录同名 .m 互相覆盖
           OBJ_FILE="build_bd/$(echo "$f" | md5sum | cut -c1-8)_$(basename "$f" .m).o"
           echo "Compiling: $f -> $OBJ_FILE"
