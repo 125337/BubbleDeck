@@ -34,6 +34,8 @@ static UIImage *(*g_orig_MMImageNamedWarn)(id, SEL, NSString *, BOOL);
 static BOOL s_darkKnown = NO;
 static BOOL s_dark = NO;
 
+@implementation TDBubbleEngine
+
 + (BOOL)currentDarkState {
     if ([NSThread isMainThread]) {
         s_dark = [UIScreen mainScreen].traitCollection.userInterfaceStyle == UIUserInterfaceStyleDark;
@@ -42,8 +44,6 @@ static BOOL s_dark = NO;
     }
     return s_darkKnown ? s_dark : NO;
 }
-
-@implementation TDBubbleEngine
 
 // ── 图片缓存 ──────────────────────────────────────────────────────────────────
 // 命中图走 NSCache（正缓存按解析路径，负缓存按请求名）——否则每次命中都磁盘读+解码。
