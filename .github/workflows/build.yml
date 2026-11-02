@@ -78,8 +78,11 @@ jobs:
 
     - name: Sign dylib (ldid 伪签名)
       run: |
-        ldid -S build_bd/BubbleDeck.dylib
-        ldid build_bd/BubbleDeck.dylib
+        # theos-action 把 ldid 装在 $THEOS/bin/，不一定在 PATH 里
+        LDID="$THEOS/bin/ldid"
+        [ -x "$LDID" ] || LDID="$(command -v ldid)"
+        "$LDID" -S build_bd/BubbleDeck.dylib
+        "$LDID" build_bd/BubbleDeck.dylib
 
     - name: Delete old artifacts
       uses: actions/github-script@v9
