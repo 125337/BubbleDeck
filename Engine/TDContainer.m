@@ -47,32 +47,66 @@ static void BDGFMul(const uint8_t *X, const uint8_t *H, uint8_t *out) {
     memcpy(out, Z, 16);
 }
 
-// GHASH：data 按 16B 块（末块 zero-pad）逐块 XOR 进 Y 后乘 H
-static void BDGhashBlock(const uint8_t *H, const void *data, size_t dataLen, uint8_t *Y) {
-    const uint8_t *b = (const uint8_t *)data;
-    size_t total = ((dataLen + 15) / 16) * 16;
-    for (size_t off = 0; off < total; off += 16) {
-        uint8_t blk[16] = {0};
-        size_t n = dataLen - off;
-        if (n > 16) n = 16;
-        memcpy(blk, b + off, n);
-        for (int j = 0; j < 16; j++) blk[j] ^= Y[j];
-        BDGFMul(blk, H, Y);
-    }
-}
-
-// GHASH_H(AAD || CT || len)；AAD/CT 各 zero-pad 到 16 倍数，len 为双 64 位比特长度（BE）
+// GHASH_H(AAD || CT || len)；AAD/CT 各 zero-pad 到 16 倍数，len 为双 64 位比特长度（BE）。
+// 查表加速：T[j][v] = (v 置于字节 15-j) · H —— 任意块乘 H 化为 16 次查表异或，
+// 比朴素逐位乘快 ~15 倍（表构建 4096 次朴素乘，对 1.8MB 密文量级均摊可忽略）。
+// 首次容器解密可能发生在主线程（主题页取图数/icon），必须足够快。
 static void BDGHASH(const uint8_t *H, const void *aad, size_t aadLen,
                     const void *ct, size_t ctLen, uint8_t *outY) {
-    uint8_t Y[16] = {0}, blk[16];
-    BDGhashBlock(H, aad, aadLen, Y);
-    BDGhashBlock(H, ct, ctLen, Y);
+    uint8_t Y[16] = {0}, B[16], tmp[16], acc[16];
+
+    // 表构建：T[j][v] = (v 置于字节 j) · H —— 字节 j 的系数是 x^(8*(15-j))..x^(8*(15-j)+7)
+    uint8_t *T = malloc((size_t)16 * 256 * 16);
+    if (T) {
+        uint8_t blk[16];
+        for (int j = 0; j < 16; j++) {
+            for (int v = 0; v < 256; v++) {
+                memset(blk, 0, 16);
+                blk[j] = (uint8_t)v;
+                BDGFMul(blk, H, T + ((size_t)j * 256 + v) * 16);
+            }
+        }
+    }
+
+    // 块处理：Y = (Y ^ B) · H
+    #define BD_GHASH_STEP(BUF)                                        \
+        do {                                                          \
+            for (int i = 0; i < 16; i++) tmp[i] = Y[i] ^ (BUF)[i];    \
+            if (T) {                                                  \
+                memset(acc, 0, 16);                                   \
+                for (int j = 0; j < 16; j++) {                        \
+                    const uint8_t *e = T + ((size_t)j * 256 + tmp[j]) * 16; \
+                    for (int i = 0; i < 16; i++) acc[i] ^= e[i];      \
+                }                                                     \
+                memcpy(Y, acc, 16);                                   \
+            } else {                                                  \
+                BDGFMul(tmp, H, Y);                                   \
+            }                                                         \
+        } while (0)
+
+    const void *datas[2] = { aad, ct };
+    const size_t lens[2] = { aadLen, ctLen };
+    for (int d = 0; d < 2; d++) {
+        const uint8_t *b = (const uint8_t *)datas[d];
+        size_t total = ((lens[d] + 15) / 16) * 16;
+        for (size_t off = 0; off < total; off += 16) {
+            memset(B, 0, 16);
+            size_t n = lens[d] - off;
+            if (n > 16) n = 16;
+            memcpy(B, b + off, n);
+            BD_GHASH_STEP(B);
+        }
+    }
+
+    // 长度块
     uint64_t abits = (uint64_t)aadLen * 8, cbits = (uint64_t)ctLen * 8;
-    memset(blk, 0, 16);
-    for (int i = 0; i < 8; i++) blk[i]     = (uint8_t)(abits >> (56 - i * 8));
-    for (int i = 0; i < 8; i++) blk[8 + i] = (uint8_t)(cbits >> (56 - i * 8));
-    for (int j = 0; j < 16; j++) blk[j] ^= Y[j];
-    BDGFMul(blk, H, Y);
+    uint8_t L[16] = {0};
+    for (int i = 0; i < 8; i++) L[i]     = (uint8_t)(abits >> (56 - i * 8));
+    for (int i = 0; i < 8; i++) L[8 + i] = (uint8_t)(cbits >> (56 - i * 8));
+    BD_GHASH_STEP(L);
+
+    #undef BD_GHASH_STEP
+    free(T);
     memcpy(outY, Y, 16);
 }
 
@@ -481,6 +515,14 @@ static void BDSetupCache(void) {
     [self purgeContainerForPack:packName];
     [TDConfig setPackSource:packName source:@"online"];
     TDLog(@"LIC", @"[TDContainer] 安装完成（零解压）: packs/%@/pack.bdpack", packName);
+
+    // 后台预热：立刻把容器解好放进缓存，跳转主题页/聊天取图直接命中缓存，主线程零等待
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        NSError *preheatErr = nil;
+        if (![TDContainer cachedContainerForPack:packName error:&preheatErr]) {
+            TDLogD(@"LIC", @"[TDContainer] 预热失败（不影响已安装）: %@", preheatErr.localizedDescription);
+        }
+    });
     return YES;
 }
 
