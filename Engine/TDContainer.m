@@ -288,10 +288,10 @@ static void BDSetupCache(void) {
 
         // 版本从明文 info.json 读（安装时落盘，与打包 AAD 同源）——JSON 格式，NSJSONSerialization 解析
         NSData *infoData = [NSData dataWithContentsOfFile:[dir stringByAppendingPathComponent:@"info.json"]];
-        id info = infoData ? [NSJSONSerialization JSONObjectWithData:infoData options:0 error:nil] : nil;
-        NSString *version = ([info isKindOfClass:[NSDictionary class]]
-                             && [info[@"version"] isKindOfClass:[NSString class]]
-                             && info[@"version"].length) ? info[@"version"] : @"1.0";
+        id infoObj = infoData ? [NSJSONSerialization JSONObjectWithData:infoData options:0 error:nil] : nil;
+        NSDictionary *info = [infoObj isKindOfClass:[NSDictionary class]] ? infoObj : nil;
+        NSString *ver = [info[@"version"] isKindOfClass:[NSString class]] ? info[@"version"] : nil;
+        NSString *version = ver.length ? ver : @"1.0";
 
         NSString *key = [TDLicense keyForPack:packName];
         if (!key.length) { BDFail(error, @"缺少解密密钥（请联网刷新授权）"); return nil; }
