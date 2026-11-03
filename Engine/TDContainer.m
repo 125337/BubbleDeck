@@ -13,19 +13,40 @@
 #import "../Core/TDLog.h"
 #import "../Core/TDLicense.h"
 #import <CommonCrypto/CommonCrypto.h>
+#import <dlfcn.h>
 #import <string.h>
 #import <zlib.h>
 #import <UIKit/UIKit.h>
 
-// GCM oneshot 接口在 libcommonCrypto.dylib（iOS 9+），theos SDK 不带 CommonCryptorSPI.h，
-// 显式声明原型（CCModeOptions 实际为 uint32_t）；符号注入时动态解析
-extern CCCryptorStatus CCCryptorGCMOneshotDecrypt(uint32_t alg, uint32_t options,
-                                                  const void *key, size_t keyLength,
-                                                  const void *iv, size_t ivLen,
-                                                  const void *aData, size_t aDataLength,
-                                                  const void *dataIn, size_t dataInLength,
-                                                  void *dataOut, size_t dataOutLength, size_t *dataOutMoved,
-                                                  const void *tag, size_t tagLength);
+// GCM oneshot 是 libcommonCrypto 的 SPI，theos SDK 不带 CommonCryptorSPI.h。
+// 且该符号 ABI 在 iOS 13 前后不同（新版多 options 与 dataOutLength 两个参数），
+// 编译期无法确定设备上是哪种 → dlsym 取符号，两种签名各定义一个函数指针，
+// 先按新 ABI 调；若返回 kCCKeySizeError(-4310)/kCCParamError(-4300)
+//（新 ABI 下参数合法时不可能出现，见调用处注释），再按旧 ABI 重试。
+typedef CCCryptorStatus (*BDGCMNewFn)(uint32_t alg, uint32_t options,
+                                      const void *key, size_t keyLength,
+                                      const void *iv, size_t ivLen,
+                                      const void *aData, size_t aDataLength,
+                                      const void *dataIn, size_t dataInLength,
+                                      void *dataOut, size_t dataOutLength, size_t *dataOutMoved,
+                                      const void *tag, size_t tagLength);
+typedef CCCryptorStatus (*BDGCMOldFn)(uint32_t alg,
+                                      const void *key, size_t keyLength,
+                                      const void *iv, size_t ivLen,
+                                      const void *aData, size_t aDataLength,
+                                      const void *dataIn, size_t dataInLength,
+                                      void *dataOut, size_t *dataOutMoved,
+                                      const void *tag, size_t tagLength);
+
+static void *BDGCMSymbol(void) {
+    static dispatch_once_t once;
+    static void *fn = NULL;
+    dispatch_once(&once, ^{
+        fn = dlsym(RTLD_DEFAULT, "CCCryptorGCMOneshotDecrypt");
+        if (!fn) TDLog(@"LIC", @"[TDContainer] dlsym CCCryptorGCMOneshotDecrypt 失败");
+    });
+    return fn;
+}
 
 // ────── zip 解析原语（TDZip 遗产平移） ──────
 
@@ -113,15 +134,35 @@ static NSData *BDDecryptBlob(NSData *blob, NSString *key,
         NSData *ct  = [blob subdataWithRange:NSMakeRange(17, len - 17 - 16)];
         NSData *tag = [blob subdataWithRange:NSMakeRange(len - 16, 16)];
         NSMutableData *pt = [NSMutableData dataWithLength:ct.length];
-        NSString *aad = [NSString stringWithFormat:@"bdpack2|%@|%@", packName, version];
+        // AAD 必须按 UTF-8 字节数传（包名含中文时 NSString.length 是 UTF-16 单位数，≠字节数）
+        NSData *aad = [[NSString stringWithFormat:@"bdpack2|%@|%@", packName, version]
+                       dataUsingEncoding:NSUTF8StringEncoding];
         size_t moved = 0;
-        CCCryptorStatus st = CCCryptorGCMOneshotDecrypt(kCCAlgorithmAES128, 0,
-                                                        keyData.bytes, keyData.length,
-                                                        iv.bytes, iv.length,
-                                                        aad.UTF8String, aad.length,
-                                                        ct.bytes, ct.length,
-                                                        pt.mutableBytes, pt.length, &moved,
-                                                        (void *)tag.bytes, tag.length);
+
+        void *sym = BDGCMSymbol();
+        if (!sym) { BDFail(error, @"GCM 符号不可用"); return nil; }
+
+        // 先按新 ABI（iOS 13+ 签名）调用
+        CCCryptorStatus st = ((BDGCMNewFn)sym)(kCCAlgorithmAES128, 0,
+                                               keyData.bytes, keyData.length,
+                                               iv.bytes, iv.length,
+                                               aad.bytes, aad.length,
+                                               ct.bytes, ct.length,
+                                               pt.mutableBytes, pt.length, &moved,
+                                               tag.bytes, tag.length);
+        if (st == -4310 || st == -4300) {
+            // 新 ABI 下 key=32B/iv=12B/长度自洽时不可能返回 kCCKeySizeError/kCCParamError，
+            // 唯一解释是符号是旧签名（参数错位）→ 旧 ABI 重试（此时参数在旧布局下全部合法，安全）
+            TDLogD(@"LIC", @"[TDContainer] GCM 新 ABI 返回 %d，改走旧 ABI", (int)st);
+            moved = 0;
+            st = ((BDGCMOldFn)sym)(kCCAlgorithmAES128,
+                                   keyData.bytes, keyData.length,
+                                   iv.bytes, iv.length,
+                                   aad.bytes, aad.length,
+                                   ct.bytes, ct.length,
+                                   pt.mutableBytes, &moved,
+                                   tag.bytes, tag.length);
+        }
         if (st != kCCSuccess) {
             BDFail(error, @"解密失败（密钥不符或文件被篡改: %d）", (int)st);
             return nil;
