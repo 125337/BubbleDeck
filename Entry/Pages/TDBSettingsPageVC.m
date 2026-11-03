@@ -12,6 +12,7 @@
 #import "../../Core/TDConfig.h"
 #import "../../Core/TDLicense.h"
 #import "../../Engine/TDBubbleEngine.h"
+#import <objc/runtime.h>
 
 @implementation TDBSettingsPageVC
 
