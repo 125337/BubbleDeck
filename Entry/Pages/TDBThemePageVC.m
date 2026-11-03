@@ -89,11 +89,31 @@
         }
         NSString *subtitle = [NSString stringWithFormat:@"%ld 图", (long)imgCount];
 
-        UIView *c = BDMakeCard(y, w, name, name, subtitle, thumb, [active isEqualToString:name]);
+        // 左滑删除容器：删除按钮垫底，卡片盖上可横向拖动（微信默认卡不可删）
+        UIView *row = [[UIView alloc] initWithFrame:CGRectMake(0, y, w, 76)];
+
+        UIButton *del = [UIButton buttonWithType:UIButtonTypeSystem];
+        del.frame = CGRectMake(w - 15 - 84, 0, 84, 76);
+        del.backgroundColor = [UIColor colorWithRed:1.0 green:0.23 blue:0.19 alpha:1.0];
+        del.layer.cornerRadius = 15;
+        [del setTitle:@"删除" forState:UIControlStateNormal];
+        [del setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+        del.titleLabel.font = [UIFont systemFontOfSize:15];
+        objc_setAssociatedObject(del, "pack", name, OBJC_ASSOCIATION_COPY);
+        [del addTarget:self action:@selector(bdDeleteTap:) forControlEvents:UIControlEventTouchUpInside];
+        [row addSubview:del];
+
+        UIView *c = BDMakeCard(0, w, name, name, subtitle, thumb, [active isEqualToString:name]);
+        c.tag = 1001;
         UITapGestureRecognizer *gr = [[UITapGestureRecognizer alloc]
             initWithTarget:self action:NSSelectorFromString(@"bdCardTap:")];
         [c addGestureRecognizer:gr];
-        [scroll addSubview:c];
+        UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc]
+            initWithTarget:self action:@selector(bdCardPan:)];
+        pan.delegate = self;
+        [c addGestureRecognizer:pan];
+        [row addSubview:c];
+        [scroll addSubview:row];
         y += 76 + 12;
         anyShown = YES;
     }
@@ -143,6 +163,81 @@
                   @"启用", NO, ^{
         [TDConfig setActivePack:pack];
         TDLog(@"DEV", @"[Pack] 激活气泡包: %@", pack);
+        [self buildPage];
+    });
+}
+
+// ────── 左滑删除 ──────
+
+static const CGFloat BDDelOpenX = -84.0;   // 删除按钮宽度
+
+// 只让横向意图的拖动接管（竖直方向放行给滚动）
+- (BOOL)gestureRecognizerShouldBegin:(UIGestureRecognizer *)gr {
+    if ([gr isKindOfClass:[UIPanGestureRecognizer class]] && gr.view.tag == 1001) {
+        CGPoint v = [(UIPanGestureRecognizer *)gr velocityInView:gr.view];
+        return fabs(v.x) > fabs(v.y);
+    }
+    return YES;
+}
+
+- (void)bdCardPan:(UIPanGestureRecognizer *)gr {
+    UIView *card = gr.view;
+    UIScrollView *scroll = (UIScrollView *)card.superview.superview;
+
+    if (gr.state == UIGestureRecognizerStateBegan) {
+        scroll.panGestureRecognizer.enabled = NO;   // 横向拖动期间锁滚动，结束恢复
+    } else if (gr.state == UIGestureRecognizerStateChanged) {
+        CGFloat x = card.transform.tx + [gr translationInView:card.superview].x;
+        [gr setTranslation:CGPointZero inView:card.superview];
+        if (x > 0) x /= 3;                                        // 右滑橡皮筋
+        if (x < BDDelOpenX) x = BDDelOpenX + (x - BDDelOpenX) / 3; // 露头后橡皮筋
+        card.transform = CGAffineTransformMakeTranslation(x, 0);
+    } else if (gr.state == UIGestureRecognizerStateEnded
+               || gr.state == UIGestureRecognizerStateCancelled) {
+        scroll.panGestureRecognizer.enabled = YES;
+        BOOL open = card.transform.tx < BDDelOpenX / 2;
+        [self bdSnapCard:card open:open];
+        if (open) [self bdCloseSiblingsOf:card];
+    }
+}
+
+// 卡片吸附动画
+- (void)bdSnapCard:(UIView *)card open:(BOOL)open {
+    [UIView animateWithDuration:0.2 animations:^{
+        card.transform = open ? CGAffineTransformMakeTranslation(BDDelOpenX, 0)
+                              : CGAffineTransformIdentity;
+    }];
+}
+
+// 关掉其他已滑开的卡片
+- (void)bdCloseSiblingsOf:(UIView *)card {
+    for (UIView *row in card.superview.superview.subviews) {
+        for (UIView *sub in row.subviews) {
+            if (sub.tag == 1001 && sub != card && sub.transform.tx != 0) {
+                [self bdSnapCard:sub open:NO];
+            }
+        }
+    }
+}
+
+// 删除按钮
+- (void)bdDeleteTap:(UIButton *)btn {
+    NSString *pack = objc_getAssociatedObject(btn, "pack");
+    if (!pack.length) return;
+    BOOL isActive = [[TDConfig activePack] isEqualToString:pack];
+
+    NSString *msg = isActive
+        ? [NSString stringWithFormat:@"「%@」正在使用中，删除后将恢复微信默认气泡。", pack]
+        : [NSString stringWithFormat:@"「%@」将从本机删除。\n服务器授权保留，以后可重新下载。", pack];
+    BDShowConfirm(self, @"删除气泡包", msg, @"删除", YES, ^{
+        NSString *dir = [TDPackLoader packDirForName:pack];
+        if (dir) [[NSFileManager defaultManager] removeItemAtPath:dir error:nil];
+        [TDContainer purgeContainerForPack:pack];
+        if (isActive) {
+            [TDConfig setActivePack:nil];
+            TDLog(@"DEV", @"[Pack] 删除正在使用的包，恢复微信默认: %@", pack);
+        }
+        TDLog(@"DEV", @"[Pack] 已删除气泡包: %@", pack);
         [self buildPage];
     });
 }
