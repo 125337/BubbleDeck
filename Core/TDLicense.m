@@ -26,7 +26,9 @@ static NSString * const kKCAccountSync   = @"lastSync";
 static NSString * const kKCAccountDevice = @"device";
 // V1 遗留字段（启动清理一次）
 static NSArray<NSString *> *kKCLegacyAccounts(void) {
-    static NSArray *a = @[@"token", @"card", @"lastVerify"];
+    static NSArray *a;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ a = @[@"token", @"card", @"lastVerify"]; });
     return a;
 }
 
@@ -180,7 +182,7 @@ static BOOL BDSyncNow(void) {
         if ([p isKindOfClass:[NSDictionary class]] && [p[@"owned"] boolValue]) owned++;
     }
     TDLog(@"LIC", @"报到成功：%lu 个包（owned %lu）",
-          (unsigned long)arr.count, (unsigned long)owned);
+          (unsigned long)[arr count], (unsigned long)owned);
     return YES;
 }
 
