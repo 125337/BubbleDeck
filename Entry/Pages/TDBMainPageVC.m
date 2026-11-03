@@ -21,15 +21,22 @@
     Method m = class_getInstanceMethod([UIViewController class], _cmd);
     if (m) ((void (*)(id, SEL))method_getImplementation(m))(self, _cmd);
     self.title = @"BubbleDeck";
+    TDLog(@"DEV", @"[Timing] 主页 viewDidLoad");
 }
 
 - (void)viewWillAppear:(BOOL)animated {
+    CFAbsoluteTime t0 = CFAbsoluteTimeGetCurrent();
     Method m = class_getInstanceMethod([UIViewController class], _cmd);
     if (m) ((void (*)(id, SEL, BOOL))method_getImplementation(m))(self, _cmd, animated);
 
     self.view.backgroundColor = BDPageBg();
-    if (self.view.bounds.size.width < 1) return; // bounds 未就绪，等下次 appear
+    if (self.view.bounds.size.width < 1) {
+        TDLog(@"DEV", @"[Timing] 主页 viewWillAppear bounds 未就绪，构建延后");
+        return; // bounds 未就绪，等下次 appear
+    }
     [self buildPage];
+    TDLog(@"DEV", @"[Timing] 主页 UI 构建完成，耗时 %.1fms（bounds %@）",
+          (CFAbsoluteTimeGetCurrent() - t0) * 1000, NSStringFromCGRect(self.view.bounds));
 }
 
 // ────── 页面构建（viewWillAppear 全量重建，量小保证状态新鲜） ──────

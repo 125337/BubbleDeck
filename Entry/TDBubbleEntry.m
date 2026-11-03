@@ -39,36 +39,22 @@ static Class BDGetBaseClass(void) {
 @end
 
 // ────── 门面 VC 的生命周期 IMP（挂在运行时类对上） ──────
+// 时序打点：量化「点击插件 → 主页可见」各段耗时。
+// 方案 A：栈替换从 viewDidAppear 提前到 viewWillAppear——push 动画首帧前就换成
+// 主页，动画直接滑进主页内容，空白门面页从视觉上消失。
 
-static void bdEntryViewDidLoad(id self, SEL _cmd) {
-    // 调用父类 viewDidLoad
-    Method m = class_getInstanceMethod(objc_getClass("UIViewController"), _cmd);
-    if (m) ((void (*)(id, SEL))method_getImplementation(m))(self, _cmd);
+static CFAbsoluteTime s_entryTViewDidLoad = 0;
+static CFAbsoluteTime s_entryTViewWillAppear = 0;
 
-    ((UIViewController *)self).title = @"BubbleDeck";
-}
-
-static void bdEntryViewWillAppear(id self, SEL _cmd, BOOL animated) {
-    Method m = class_getInstanceMethod(objc_getClass("UIViewController"), _cmd);
-    if (m) ((void (*)(id, SEL, BOOL))method_getImplementation(m))(self, _cmd, animated);
-
-    // 门面只闪现一瞬（随即被主页替换），底色与插件页保持一致防白闪
-    if (@available(iOS 13.0, *)) {
-        ((UIViewController *)self).view.backgroundColor = BDPageBg();
+// 一次性进场：把自己在导航栈里替换成主页（back 直接回到微信插件列表，
+// 不会停在空白门面页）。viewWillAppear 优先做；bounds 未就绪则由 viewDidAppear 兜底重试。
+static void BDEnterMainIfNeeded(UIViewController *vc, CFAbsoluteTime t0, NSString *from) {
+    if (objc_getAssociatedObject(vc, "bdEntered")) return;
+    if (vc.view.bounds.size.width < 1) {
+        TDLog(@"DEV", @"[Timing] %@ bounds 未就绪，进场延后重试", from);
+        return;
     }
-}
-
-static void bdEntryViewDidAppear(id self, SEL _cmd, BOOL animated) {
-    Method m = class_getInstanceMethod(objc_getClass("UIViewController"), _cmd);
-    if (m) ((void (*)(id, SEL, BOOL))method_getImplementation(m))(self, _cmd, animated);
-
-    UIViewController *vc = (UIViewController *)self;
-    if (vc.view.bounds.size.width < 1) return; // bounds 未就绪，等下次 appear
-
-    // 一次性进场：把自己在导航栈里替换成主页（back 直接回到微信插件列表，
-    // 不会停在空白门面页；associated object 做一次性标记）
-    if (objc_getAssociatedObject(self, "bdEntered")) return;
-    objc_setAssociatedObject(self, "bdEntered", @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(vc, "bdEntered", @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
     UINavigationController *nav = vc.navigationController;
     TDBMainPageVC *main = [[TDBMainPageVC alloc] init];
@@ -76,16 +62,58 @@ static void bdEntryViewDidAppear(id self, SEL _cmd, BOOL animated) {
         NSMutableArray *stack = [nav.viewControllers mutableCopy];
         [stack replaceObjectAtIndex:stack.count - 1 withObject:main];
         [nav setViewControllers:stack animated:NO];
-        TDLog(@"DEV", @"[Entry] 主页已替换进栈");
+        TDLog(@"DEV", @"[Entry] 主页已替换进栈（%@）", from);
     } else if (nav) {
         [nav pushViewController:main animated:YES];
-        TDLog(@"DEV", @"[Entry] 主页已 push");
+        TDLog(@"DEV", @"[Entry] 主页已 push（%@）", from);
     } else {
         // 兜底：无导航栈则模态 present（极端版本差异）
         UINavigationController *wrap = [[UINavigationController alloc] initWithRootViewController:main];
         [vc presentViewController:wrap animated:YES completion:nil];
-        TDLog(@"DEV", @"[Entry] 无导航栈，模态 present 兜底");
+        TDLog(@"DEV", @"[Entry] 无导航栈，模态 present 兜底（%@）", from);
     }
+    TDLog(@"DEV", @"[Timing] %@ 进场替换完成，耗时 %.0fms",
+          from, (CFAbsoluteTimeGetCurrent() - t0) * 1000);
+}
+
+static void bdEntryViewDidLoad(id self, SEL _cmd) {
+    // 调用父类 viewDidLoad
+    Method m = class_getInstanceMethod(objc_getClass("UIViewController"), _cmd);
+    if (m) ((void (*)(id, SEL))method_getImplementation(m))(self, _cmd);
+
+    s_entryTViewDidLoad = CFAbsoluteTimeGetCurrent();
+    ((UIViewController *)self).title = @"BubbleDeck";
+    TDLog(@"DEV", @"[Timing] 门面 viewDidLoad");
+}
+
+static void bdEntryViewWillAppear(id self, SEL _cmd, BOOL animated) {
+    Method m = class_getInstanceMethod(objc_getClass("UIViewController"), _cmd);
+    if (m) ((void (*)(id, SEL, BOOL))method_getImplementation(m))(self, _cmd, animated);
+
+    CFAbsoluteTime t0 = CFAbsoluteTimeGetCurrent();
+    s_entryTViewWillAppear = t0;
+    TDLog(@"DEV", @"[Timing] 门面 viewWillAppear（距 viewDidLoad %.0fms）",
+          (t0 - s_entryTViewDidLoad) * 1000);
+
+    // 门面只闪现一瞬（push 首帧前即被主页替换），底色与插件页保持一致防白闪
+    if (@available(iOS 13.0, *)) {
+        ((UIViewController *)self).view.backgroundColor = BDPageBg();
+    }
+
+    BDEnterMainIfNeeded((UIViewController *)self, t0, @"viewWillAppear");
+}
+
+static void bdEntryViewDidAppear(id self, SEL _cmd, BOOL animated) {
+    Method m = class_getInstanceMethod(objc_getClass("UIViewController"), _cmd);
+    if (m) ((void (*)(id, SEL, BOOL))method_getImplementation(m))(self, _cmd, animated);
+
+    CFAbsoluteTime t0 = CFAbsoluteTimeGetCurrent();
+    // 这段 ≈ push 动画时长：appear 是动画播完才回调的最晚时点（旧版延迟主体）
+    TDLog(@"DEV", @"[Timing] 门面 viewDidAppear（距 viewWillAppear %.0fms，≈push 动画时长）",
+          (t0 - s_entryTViewWillAppear) * 1000);
+
+    // viewWillAppear 没替换成（bounds 未就绪等）→ 此处兜底重试
+    BDEnterMainIfNeeded((UIViewController *)self, t0, @"viewDidAppear");
 }
 
 // ────── 安装 ──────
