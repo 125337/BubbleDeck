@@ -269,15 +269,13 @@ static UIScrollView *BDNewScroll(UIViewController *vc) {
     UIScrollView *scroll = [[UIScrollView alloc] initWithFrame:CGRectMake(0, 0, vc.view.bounds.size.width,
                                                                           vc.view.bounds.size.height)];
     scroll.showsVerticalScrollIndicator = YES;
-    if (@available(iOS 13.0, *)) scroll.automaticallyAdjustsScrollIndicatorInsets = NO;
-    scroll.translatesAutoresizingMaskIntoConstraints = NO;
-    // 四边钉在 safeAreaLayoutGuide 上——导航栏/状态栏/Home 条高度全由系统维护
-    [NSLayoutConstraint activateConstraints:@[
-        [scroll.topAnchor      constraintEqualToAnchor:vc.view.safeAreaLayoutGuide.topAnchor],
-        [scroll.bottomAnchor   constraintEqualToAnchor:vc.view.safeAreaLayoutGuide.bottomAnchor],
-        [scroll.leadingAnchor  constraintEqualToAnchor:vc.view.safeAreaLayoutGuide.leadingAnchor],
-        [scroll.trailingAnchor constraintEqualToAnchor:vc.view.safeAreaLayoutGuide.trailingAnchor],
-    ]];
+    scroll.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    // 全屏铺在 view 上（MMUIViewController 的 view 延伸到导航栏底下），
+    // 用系统自动内容内边距代替手写 safeArea 约束——约束在 viewWillAppear 激活
+    // 有 NSISEngine 异常崩溃案例（0.4.0 真机复现），frame 方案无此问题
+    if (@available(iOS 11.0, *)) {
+        scroll.contentInsetAdjustmentBehavior = UIScrollViewContentInsetAdjustmentAutomatic;
+    }
     [vc.view addSubview:scroll];
     return scroll;
 }
