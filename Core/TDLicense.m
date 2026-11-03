@@ -107,24 +107,39 @@ static NSString *BDModel(void) {
     return [NSString stringWithUTF8String:u.machine];
 }
 
-// wxid 仅作服务器记录展示，不作校验键——尽力抓，抓不到发空串
+// Mio 实证同款（8.0.60）：MMContext currentContext getService: 优先，
+// MMServiceCenter defaultCenter 兜底但必须带 respondsToSelector 守卫
+//（8.0.60 原生可能没有 defaultCenter 类方法，无守卫直调抛异常）。
+static id BDGetService(Class serviceClass) {
+    if (!serviceClass) return nil;
+    Class mmctx = objc_getClass("MMContext");
+    if (mmctx && [mmctx respondsToSelector:@selector(currentContext)]) {
+        id ctx = ((id (*)(id, SEL))objc_msgSend)(mmctx, @selector(currentContext));
+        if (ctx && [ctx respondsToSelector:@selector(getService:)]) {
+            id svc = ((id (*)(id, SEL, Class))objc_msgSend)(ctx, @selector(getService:), serviceClass);
+            if (svc) return svc;
+        }
+    }
+    Class mmCenter = objc_getClass("MMServiceCenter");
+    if (mmCenter && [mmCenter respondsToSelector:NSSelectorFromString(@"defaultCenter")]) {
+        id center = ((id (*)(id, SEL))objc_msgSend)(mmCenter, NSSelectorFromString(@"defaultCenter"));
+        if (center && [center respondsToSelector:@selector(getService:)]) {
+            return ((id (*)(id, SEL, Class))objc_msgSend)(center, @selector(getService:), serviceClass);
+        }
+    }
+    return nil;
+}
+
+// wxid：CContactMgr getSelfContact → m_nsUsrName（Mio ServiceHelper 同款，selector 直调非 KVC）。
+// 仅作服务器记录展示，不作校验键——尽力抓，抓不到发空串。
 static NSString *BDWxid(void) {
     @try {
-        id center = ((id (*)(id, SEL))objc_msgSend)(objc_getClass("MMServiceCenter"),
-                                                    NSSelectorFromString(@"defaultCenter"));
-        if (!center) return nil;
-        // 候选：服务类名 + KVC 路径（微信版本差异，逐个试，全 @try 兜底）
-        NSDictionary *cands = @{
-            @"CContactMgr"             : @[@"selfContact.m_nsUsrName"],
-            @"WCAccountServiceDataMgr" : @[@"accountInfo.m_nsUsrName", @"m_nsUsrName"],
-        };
-        for (NSString *svcName in cands) {
-            Class cls = objc_getClass(svcName.UTF8String);
-            if (!cls) continue;
-            id svc = ((id (*)(id, SEL, Class))objc_msgSend)(center, NSSelectorFromString(@"getService:"), cls);
-            if (!svc) continue;
-            for (NSString *path in cands[svcName]) {
-                id v = [svc valueForKeyPath:path];
+        id contactMgr = BDGetService(objc_getClass("CContactMgr"));
+        if (contactMgr && [contactMgr respondsToSelector:@selector(getSelfContact)]) {
+            id selfContact = ((id (*)(id, SEL))objc_msgSend)(contactMgr, @selector(getSelfContact));
+            SEL usrSel = NSSelectorFromString(@"m_nsUsrName");
+            if (selfContact && [selfContact respondsToSelector:usrSel]) {
+                id v = ((id (*)(id, SEL))objc_msgSend)(selfContact, usrSel);
                 if ([v isKindOfClass:[NSString class]] && [v length]) return v;
             }
         }
