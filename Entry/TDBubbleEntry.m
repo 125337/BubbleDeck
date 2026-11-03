@@ -572,6 +572,7 @@ static void bdCardTap(id self, SEL _cmd, UITapGestureRecognizer *gr) {
 static void bdReloadTap(id self, SEL _cmd, UIButton *btn) {
     UIViewController *vc = (UIViewController *)self;
     [TDBubbleEngine purgeCaches];       // 顺带清负缓存，包内容变更即时生效
+    if ([TDLicense isActiveNow]) s_onlinePacks = nil;   // 在线列表也重拉（后台新登记的包能刷出来）
     BDBuildPage(vc);
     TDLog(@"DEV", @"[Pack] 重新加载，packs=%@", [TDConfig availablePacks]);
 }
