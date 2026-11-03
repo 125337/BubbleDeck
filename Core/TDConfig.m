@@ -10,7 +10,7 @@
 #import "../Engine/TDPackLoader.h"
 #import "../Engine/TDBubbleEngine.h"
 
-NSString * const kTDVersion = @"0.1.0";
+NSString * const kTDVersion = @"0.2.0";
 
 static NSString *TDPrefsPath(void) {
     NSString *prefs = [NSSearchPathForDirectoriesInDomains(NSLibraryDirectory, NSUserDomainMask, YES)

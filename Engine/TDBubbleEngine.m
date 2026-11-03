@@ -19,6 +19,7 @@
 #import "TDBubbleEngine.h"
 #import "TDConfig.h"
 #import "TDLog.h"
+#import "../Core/TDLicense.h"
 #import "../libs/substrate.h"
 #import <objc/runtime.h>
 #import <UIKit/UIKit.h>
@@ -78,6 +79,7 @@ static NSCache<NSString *, NSNull *>  *s_negCache = nil;   // key: 请求名（�
 }
 
 + (nullable UIImage *)bubbleImageForName:(nullable NSString *)name {
+    if (![TDLicense isActiveNow]) return nil;   // 收费闸门：未激活/兜底超期 → 全放行官方图
     if (name.length == 0 || [name containsString:@"/"]) return nil;  // 含路径成分一律不动
 
     // ① 只接气泡族，其余直接放行（省去负缓存写入）

@@ -23,8 +23,11 @@ WORKFLOW  = 'Build BubbleDeck'
 VERIFY_U8  = ['BubbleDeck', 'TDBubbleEntry', 'TDBubbleEngine', 'TDPackLoader',
               'TDConfig', 'MMThemeManager', 'ChatRoom_Bubble_', 'bubbleImageForName',
               'imageNamed:warnIfNotFound:', 'BubbleDeckEntryVC', 'WCPluginsMgr',
-              '_Dark']
-VERIFY_U16 = ['气泡包', '微信默认', '使用中', '日志记录', '重新加载', '本地气泡引擎']
+              '_Dark', 'TDNet', 'TDLicense', 'TDZip', 'qb.xhhan.xyz',
+              'X-BD-Sign', 'BDPK', 'installBdpackData', 'startupCheck']
+VERIFY_U16 = ['气泡包', '微信默认', '使用中', '日志记录', '重新加载', '本地气泡引擎',
+              '插件未激活', '输入卡密', '在线气泡包', '已激活', '下载', '激活成功',
+              '永久授权']
 
 _CREDS = None
 

@@ -71,6 +71,7 @@ jobs:
               -target arm64-apple-ios14.0 \
               -dynamiclib \
               -undefined dynamic_lookup \
+              -lz \
               -Wl,-S \
               -Wl,-x \
               -o build_bd/BubbleDeck.dylib \
