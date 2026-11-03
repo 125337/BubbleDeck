@@ -13,39 +13,67 @@
 #import "../Core/TDLog.h"
 #import "../Core/TDLicense.h"
 #import <CommonCrypto/CommonCrypto.h>
-#import <dlfcn.h>
 #import <string.h>
 #import <zlib.h>
 #import <UIKit/UIKit.h>
 
-// GCM oneshot 是 libcommonCrypto 的 SPI，theos SDK 不带 CommonCryptorSPI.h。
-// 且该符号 ABI 在 iOS 13 前后不同（新版多 options 与 dataOutLength 两个参数），
-// 编译期无法确定设备上是哪种 → dlsym 取符号，两种签名各定义一个函数指针，
-// 先按新 ABI 调；若返回 kCCKeySizeError(-4310)/kCCParamError(-4300)
-//（新 ABI 下参数合法时不可能出现，见调用处注释），再按旧 ABI 重试。
-typedef CCCryptorStatus (*BDGCMNewFn)(uint32_t alg, uint32_t options,
-                                      const void *key, size_t keyLength,
-                                      const void *iv, size_t ivLen,
-                                      const void *aData, size_t aDataLength,
-                                      const void *dataIn, size_t dataInLength,
-                                      void *dataOut, size_t dataOutLength, size_t *dataOutMoved,
-                                      const void *tag, size_t tagLength);
-typedef CCCryptorStatus (*BDGCMOldFn)(uint32_t alg,
-                                      const void *key, size_t keyLength,
-                                      const void *iv, size_t ivLen,
-                                      const void *aData, size_t aDataLength,
-                                      const void *dataIn, size_t dataInLength,
-                                      void *dataOut, size_t *dataOutMoved,
-                                      const void *tag, size_t tagLength);
+// ────── GCM 自实现（公共 CCCrypt ECB + 手写 GHASH） ──────
+// 不用 CCCryptorGCMOneshotDecrypt：私有 SPI 且函数签名在 iOS 版本间漂移，
+// 实测新/旧两种已知 ABI 均报参数错（-4310/-4300），行为不可依赖。
+// GCM = CTR 解密 + GHASH 认证（NIST SP 800-38D），逻辑已与 python cryptography 对拍。
 
-static void *BDGCMSymbol(void) {
-    static dispatch_once_t once;
-    static void *fn = NULL;
-    dispatch_once(&once, ^{
-        fn = dlsym(RTLD_DEFAULT, "CCCryptorGCMOneshotDecrypt");
-        if (!fn) TDLog(@"LIC", @"[TDContainer] dlsym CCCryptorGCMOneshotDecrypt 失败");
-    });
-    return fn;
+// AES-ECB 加密（公共 API，仅用于 keystream 与 J0 加密）；inLen 须为 16 的倍数
+static BOOL BDAesEcb(const void *key, size_t keyLen, const void *in, size_t inLen, void *out) {
+    size_t moved = 0;
+    CCCryptorStatus st = CCCrypt(kCCEncrypt, kCCAlgorithmAES128, kCCOptionECBMode,
+                                 key, keyLen, NULL,
+                                 in, inLen, out, inLen, &moved);
+    return st == kCCSuccess && moved == inLen;
+}
+
+// GF(2^128) 乘法（MSB 优先，R = 0xE1 << 120）
+static void BDGFMul(const uint8_t *X, const uint8_t *H, uint8_t *out) {
+    uint8_t Z[16] = {0}, V[16];
+    memcpy(V, H, 16);
+    for (int i = 0; i < 128; i++) {
+        if (X[i >> 3] & (0x80 >> (i & 7))) {
+            for (int j = 0; j < 16; j++) Z[j] ^= V[j];
+        }
+        uint8_t lsb = V[15] & 1;
+        for (int j = 15; j > 0; j--) V[j] = (uint8_t)((V[j] >> 1) | ((V[j - 1] & 1) << 7));
+        V[0] >>= 1;
+        if (lsb) V[0] ^= 0xE1;
+    }
+    memcpy(out, Z, 16);
+}
+
+// GHASH：data 按 16B 块（末块 zero-pad）逐块 XOR 进 Y 后乘 H
+static void BDGhashBlock(const uint8_t *H, const void *data, size_t dataLen, uint8_t *Y) {
+    const uint8_t *b = (const uint8_t *)data;
+    size_t total = ((dataLen + 15) / 16) * 16;
+    for (size_t off = 0; off < total; off += 16) {
+        uint8_t blk[16] = {0};
+        size_t n = dataLen - off;
+        if (n > 16) n = 16;
+        memcpy(blk, b + off, n);
+        for (int j = 0; j < 16; j++) blk[j] ^= Y[j];
+        BDGFMul(blk, H, Y);
+    }
+}
+
+// GHASH_H(AAD || CT || len)；AAD/CT 各 zero-pad 到 16 倍数，len 为双 64 位比特长度（BE）
+static void BDGHASH(const uint8_t *H, const void *aad, size_t aadLen,
+                    const void *ct, size_t ctLen, uint8_t *outY) {
+    uint8_t Y[16] = {0}, blk[16];
+    BDGhashBlock(H, aad, aadLen, Y);
+    BDGhashBlock(H, ct, ctLen, Y);
+    uint64_t abits = (uint64_t)aadLen * 8, cbits = (uint64_t)ctLen * 8;
+    memset(blk, 0, 16);
+    for (int i = 0; i < 8; i++) blk[i]     = (uint8_t)(abits >> (56 - i * 8));
+    for (int i = 0; i < 8; i++) blk[8 + i] = (uint8_t)(cbits >> (56 - i * 8));
+    for (int j = 0; j < 16; j++) blk[j] ^= Y[j];
+    BDGFMul(blk, H, Y);
+    memcpy(outY, Y, 16);
 }
 
 // ────── zip 解析原语（TDZip 遗产平移） ──────
@@ -133,40 +161,64 @@ static NSData *BDDecryptBlob(NSData *blob, NSString *key,
         NSData *iv  = [blob subdataWithRange:NSMakeRange(5, 12)];
         NSData *ct  = [blob subdataWithRange:NSMakeRange(17, len - 17 - 16)];
         NSData *tag = [blob subdataWithRange:NSMakeRange(len - 16, 16)];
-        NSMutableData *pt = [NSMutableData dataWithLength:ct.length];
-        // AAD 必须按 UTF-8 字节数传（包名含中文时 NSString.length 是 UTF-16 单位数，≠字节数）
+        // AAD 必须按 UTF-8 字节传（包名含中文时 NSString.length 是 UTF-16 单位数，≠字节数）
         NSData *aad = [[NSString stringWithFormat:@"bdpack2|%@|%@", packName, version]
                        dataUsingEncoding:NSUTF8StringEncoding];
-        size_t moved = 0;
 
-        void *sym = BDGCMSymbol();
-        if (!sym) { BDFail(error, @"GCM 符号不可用"); return nil; }
-
-        // 先按新 ABI（iOS 13+ 签名）调用
-        CCCryptorStatus st = ((BDGCMNewFn)sym)(kCCAlgorithmAES128, 0,
-                                               keyData.bytes, keyData.length,
-                                               iv.bytes, iv.length,
-                                               aad.bytes, aad.length,
-                                               ct.bytes, ct.length,
-                                               pt.mutableBytes, pt.length, &moved,
-                                               tag.bytes, tag.length);
-        if (st == -4310 || st == -4300) {
-            // 新 ABI 下 key=32B/iv=12B/长度自洽时不可能返回 kCCKeySizeError/kCCParamError，
-            // 唯一解释是符号是旧签名（参数错位）→ 旧 ABI 重试（此时参数在旧布局下全部合法，安全）
-            TDLogD(@"LIC", @"[TDContainer] GCM 新 ABI 返回 %d，改走旧 ABI", (int)st);
-            moved = 0;
-            st = ((BDGCMOldFn)sym)(kCCAlgorithmAES128,
-                                   keyData.bytes, keyData.length,
-                                   iv.bytes, iv.length,
-                                   aad.bytes, aad.length,
-                                   ct.bytes, ct.length,
-                                   pt.mutableBytes, &moved,
-                                   tag.bytes, tag.length);
-        }
-        if (st != kCCSuccess) {
-            BDFail(error, @"解密失败（密钥不符或文件被篡改: %d）", (int)st);
+        // 1. H = E(K, 0^128)
+        const uint8_t zero[16] = {0};
+        uint8_t H[16];
+        if (!BDAesEcb(keyData.bytes, keyData.length, zero, 16, H)) {
+            BDFail(error, @"GCM 初始化失败（ECB）");
             return nil;
         }
+
+        // 2. J0 = IV(12B) || 0x00000001
+        uint8_t j0[16];
+        memcpy(j0, iv.bytes, 12);
+        j0[12] = 0; j0[13] = 0; j0[14] = 0; j0[15] = 1;
+
+        // 3. tag 校验：tag == E(K,J0) XOR GHASH(H, AAD, CT)
+        uint8_t S[16], ekj0[16], calc[16];
+        BDGHASH(H, aad.bytes, aad.length, ct.bytes, ct.length, S);
+        if (!BDAesEcb(keyData.bytes, keyData.length, j0, 16, ekj0)) {
+            BDFail(error, @"GCM 初始化失败（J0）");
+            return nil;
+        }
+        for (int i = 0; i < 16; i++) calc[i] = ekj0[i] ^ S[i];
+        if (memcmp(calc, tag.bytes, 16) != 0) {
+            BDFail(error, @"解密失败（密钥不符或文件被篡改）");
+            return nil;
+        }
+
+        // 4. CTR 解密：keystream = E(K, J0+1), E(K, J0+2), ...
+        const NSUInteger ctLen = ct.length;
+        const NSUInteger nBlocks = (ctLen + 15) / 16;
+        NSMutableData *ctr = [NSMutableData dataWithLength:nBlocks * 16];
+        NSMutableData *ks  = [NSMutableData dataWithLength:nBlocks * 16];
+        if (!ctr || !ks) { BDFail(error, @"内存不足"); return nil; }
+        uint8_t cur[16];
+        memcpy(cur, j0, 16);
+        uint8_t *cb = ctr.mutableBytes;
+        for (NSUInteger i = 0; i < nBlocks; i++) {
+            uint32_t ctrv = ((uint32_t)cur[12] << 24) | ((uint32_t)cur[13] << 16) |
+                             ((uint32_t)cur[14] << 8) | (uint32_t)cur[15];
+            ctrv++;
+            cur[12] = (uint8_t)(ctrv >> 24); cur[13] = (uint8_t)(ctrv >> 16);
+            cur[14] = (uint8_t)(ctrv >> 8);  cur[15] = (uint8_t)ctrv;
+            memcpy(cb + i * 16, cur, 16);
+        }
+        if (!BDAesEcb(keyData.bytes, keyData.length, ctr.bytes, ctr.length, ks.mutableBytes)) {
+            BDFail(error, @"GCM 解密失败（ECB）");
+            return nil;
+        }
+
+        NSMutableData *pt = [NSMutableData dataWithLength:ctLen];
+        if (!pt) { BDFail(error, @"内存不足"); return nil; }
+        const uint8_t *ck = ct.bytes, *ksb = ks.bytes;
+        uint8_t *ptb = pt.mutableBytes;
+        for (NSUInteger i = 0; i < ctLen; i++) ptb[i] = ck[i] ^ ksb[i];
+
         TDLogD(@"LIC", @"[TDContainer] BDP2 解密成功: %@ 内层 zip %tu 字节", packName, pt.length);
         return pt;
     }
