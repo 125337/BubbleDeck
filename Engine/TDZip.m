@@ -119,7 +119,7 @@ static BOOL TDUnzip(NSData *zipData, NSString *destDir) {
         NSString *name = [[NSString alloc] initWithBytes:p + 46 length:nameLen encoding:NSUTF8StringEncoding];
         if (!name.length) {
             name = [[NSString alloc] initWithBytes:p + 46 length:nameLen
-                    encoding:CFStringConvertEncodingToNSStringEncoding(kCFStringEncodingGB_1808_2000)];
+                    encoding:CFStringConvertEncodingToNSStringEncoding(kCFStringEncodingGB_18030_2000)];
         }
         if (!name.length) {
             name = [[NSString alloc] initWithBytes:p + 46 length:nameLen
