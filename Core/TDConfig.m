@@ -11,7 +11,7 @@
 #import "../Engine/TDPackLoader.h"
 #import "../Engine/TDBubbleEngine.h"
 
-NSString * const kTDVersion = @"0.3.0";
+NSString * const kTDVersion = @"0.4.0";
 
 static NSString *TDPrefsPath(void) {
     NSString *prefs = [NSSearchPathForDirectoriesInDomains(NSLibraryDirectory, NSUserDomainMask, YES)
@@ -31,6 +31,10 @@ static NSString *s_packDir = nil;
 // 包来源（prefs: sources = {包名: @"online"}）。热路径读（闸门），走内存缓存。
 static NSDictionary *s_sources = nil;
 static BOOL s_sourcesLoaded = NO;
+
+// 插件总开关（prefs: pluginEnabled，缺省 YES）。热路径读（引擎闸门第一道），走内存缓存。
+static BOOL s_enabled = YES;
+static BOOL s_enabledLoaded = NO;
 
 static NSDictionary *BDSources(void) {
     if (!s_sourcesLoaded) {
@@ -85,6 +89,26 @@ static NSDictionary *BDSources(void) {
         s_dirResolved = YES;
     }
     return s_packDir;
+}
+
++ (BOOL)pluginEnabled {
+    if (!s_enabledLoaded) {
+        NSNumber *v = [NSMutableDictionary dictionaryWithContentsOfFile:TDPrefsPath()][@"pluginEnabled"];
+        s_enabled = v ? [v boolValue] : YES;
+        s_enabledLoaded = YES;
+    }
+    return s_enabled;
+}
+
++ (void)setPluginEnabled:(BOOL)enabled {
+    NSMutableDictionary *d = [NSMutableDictionary dictionaryWithContentsOfFile:TDPrefsPath()] ?: [NSMutableDictionary dictionary];
+    d[@"pluginEnabled"] = @(enabled);
+    [d writeToFile:TDPrefsPath() atomically:YES];
+
+    s_enabled = enabled;
+    s_enabledLoaded = YES;
+
+    [TDBubbleEngine purgeCaches];
 }
 
 + (NSString *)sourceForPack:(NSString *)name {

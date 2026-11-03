@@ -30,6 +30,11 @@ extern NSString * const kTDVersion;
 /// 已安装的气泡包名列表（packsRoot 下含 info.json 的目录名，按名称排序）
 + (NSArray<NSString *> *)availablePacks;
 
+/// 插件总开关（prefs: pluginEnabled，缺省 YES）。关闭后引擎完全不供图（含本地导入包）。
++ (BOOL)pluginEnabled;
+
++ (void)setPluginEnabled:(BOOL)enabled;
+
 /// 包来源：@"online"（在线下载安装，闸门校验授权）或 @"imported"（本地导入，默认，免费放行）
 + (NSString *)sourceForPack:(NSString *)name;
 

@@ -84,6 +84,9 @@ static NSCache<NSString *, NSNull *>  *s_negCache = nil;   // key: 请求名（�
     // ① 只接气泡族，其余直接放行（省去负缓存写入）
     if (![name hasPrefix:@"ChatRoom_Bubble_"]) return nil;
 
+    // ⓪ 总闸：插件开关关闭 → 一律放行官方图（含本地导入包）
+    if (![TDConfig pluginEnabled]) return nil;
+
     // 收费闸门（V2 按包授权）：本地导入包免费放行；在线包需清单未超期且 owned。
     //    全内存判断，热路径零 IO。
     NSString *active = [TDConfig activePack];

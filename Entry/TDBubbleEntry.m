@@ -2,7 +2,12 @@
 //  TDBubbleEntry.m
 //  BubbleDeck
 //
-//  极简设置页（V1）：选气泡包 / 重新加载 / 日志开关。
+//  插件页（v0.4.0 四页结构，参考 BubbleBox 信息架构）：
+//    主页   = 启用插件总开关 + 三入口（下载气泡/更换气泡/设置中心）+ 兑换激活码
+//    商店页 = 只列 owned 包（未下载[下载] / 已下载[已安装]）；未拥有、已失效一律不出现
+//    主题页 = 只列已下载且授权有效的包（微信默认 + 本地包），点卡片启用
+//    设置页 = 日志开关 / 重新加载 / 关于
+//  单 VC 内切页（自绘导航头 + 返回），不依赖微信导航栈。
 //  机制照搬 ThemeDeck TDPluginEntry（已验证同款流程），运行时创建类对，
 //  继承微信基类（MMUIViewController，缺失回退 UIViewController）。
 //  注意：MMUIViewController 的 view 延伸到导航栏底下，所有布局从 safeArea 起算。
@@ -49,6 +54,11 @@ static UIColor *BDPlaceholderBg(void) {
     return [UIColor colorWithRed:0.88 green:0.88 blue:0.89 alpha:1.0];
 }
 
+static UIColor *BDTint(void) {
+    if (@available(iOS 13.0, *)) return [UIColor systemBlueColor];
+    return [UIColor colorWithRed:0.0 green:0.48 blue:1.0 alpha:1.0];
+}
+
 // 包图片数：统计解包目录里的位图文件
 static NSInteger BDPackImageCount(NSString *dir) {
     NSInteger files = 0;
@@ -62,7 +72,13 @@ static NSInteger BDPackImageCount(NSString *dir) {
     return files;
 }
 
-// ────── 气泡包卡片 ──────
+static NSString *BDFileSize(long long bytes) {
+    if (bytes >= 1024 * 1024) return [NSString stringWithFormat:@"%.1f MB", bytes / 1024.0 / 1024.0];
+    if (bytes >= 1024) return [NSString stringWithFormat:@"%.0f KB", bytes / 1024.0];
+    return [NSString stringWithFormat:@"%lld B", bytes];
+}
+
+// ────── 主题页：气泡包卡片 ──────
 // packName = nil 表示「微信默认」卡；isActive 决定右侧徽章样式
 
 static UIView *BDMakeCard(CGFloat y, CGFloat w,
@@ -73,7 +89,7 @@ static UIView *BDMakeCard(CGFloat y, CGFloat w,
     card.layer.cornerRadius = 15;
     if (@available(iOS 13.0, *)) card.layer.cornerCurve = kCACornerCurveContinuous;
     if (@available(iOS 13.0, *)) {
-        if (isActive) card.layer.borderWidth = 1.5, card.layer.borderColor = [UIColor systemBlueColor].CGColor;
+        if (isActive) card.layer.borderWidth = 1.5, card.layer.borderColor = BDTint().CGColor;
     }
 
     // 缩略图：48pt 圆角；无图用包名首字占位
@@ -116,8 +132,7 @@ static UIView *BDMakeCard(CGFloat y, CGFloat w,
 
     if (isActive) {
         UILabel *badge = [[UILabel alloc] initWithFrame:CGRectMake(w - 30 - 66, 28, 58, 22)];
-        if (@available(iOS 13.0, *)) badge.backgroundColor = [UIColor systemBlueColor];
-        else badge.backgroundColor = [UIColor colorWithRed:0.0 green:0.48 blue:1.0 alpha:1.0];
+        badge.backgroundColor = BDTint();
         badge.textColor = [UIColor whiteColor];
         badge.font = [UIFont systemFontOfSize:11 weight:UIFontWeightMedium];
         badge.textAlignment = NSTextAlignmentCenter;
@@ -140,23 +155,17 @@ static UIView *BDMakeCard(CGFloat y, CGFloat w,
     return card;
 }
 
-// ────── 在线包：状态与下载器 ──────
+// ────── 商店页：状态与下载器 ──────
 
 static NSString *s_downloading = nil;                 // 正在下载的包名
 static NSString *s_dlKey = nil;                       // 当前下载任务的 .bdpack 密钥（清单下发）
 static float s_dlProgress = 0;
 static NSMutableDictionary<NSString *, UIButton *> *s_dlButtons;
 static BOOL s_fetchingEnts = NO;                      // 报到进行中
-static BOOL s_triedFetch = NO;                        // 本次进页是否已尝试报到（防重建循环）
+static BOOL s_triedFetch = NO;                        // 本次会话是否已尝试报到（防重建循环）
 
 static void BDBuildPage(UIViewController *vc);          // 前置声明（见下）
 static void BDFetchEntitlements(UIViewController *vc);
-
-static NSString *BDFileSize(long long bytes) {
-    if (bytes >= 1024 * 1024) return [NSString stringWithFormat:@"%.1f MB", bytes / 1024.0 / 1024.0];
-    if (bytes >= 1024) return [NSString stringWithFormat:@"%.0f KB", bytes / 1024.0];
-    return [NSString stringWithFormat:@"%lld B", bytes];
-}
 
 // 进度写回当前下载按钮（页面重建后按钮会被 s_dlButtons 换新）
 static void BDUpdateProgressButton(void) {
@@ -251,137 +260,286 @@ didCompleteWithError:(NSError *)error {
 
 @end
 
-// ────── 页面构建（viewWillAppear 全量重建，量小保证状态新鲜） ──────
+// ────── 页面框架（viewWillAppear 全量重建，量小保证状态新鲜） ──────
 
-static const void *kBDBottomKey = "bottom";
+// 当前页：0 主页 / 1 商店 / 2 主题 / 3 设置
+static NSInteger s_page = 0;
 
-// 工具行（重新加载按钮 / 日志开关），复用一个底部容器
-static void BDBuildPage(UIViewController *vc) {
-    // 移除旧 UI（重建）
-    for (UIView *sub in vc.view.subviews) [sub removeFromSuperview];
-    objc_setAssociatedObject(vc, kBDBottomKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    if (!s_dlButtons) s_dlButtons = [NSMutableDictionary dictionary];
-    [s_dlButtons removeAllObjects];   // 旧按钮引用换新（重建后进度写最新按钮）
-
-    CGFloat w = vc.view.bounds.size.width;
-    CGFloat h = vc.view.bounds.size.height;
-
-    NSArray<NSString *> *packs = [TDConfig availablePacks];
-    NSString *active = [TDConfig activePack];
-    // 激活名在包列表里不存在 = 配置残留，按未激活处理并清理
-    if (active && ![packs containsObject:active]) {
-        TDLog(@"DEV", @"[activePack] 指向不存在的包 %@，清理", active);
-        [TDConfig setActivePack:nil];
-        active = nil;
-    }
-
-    UIScrollView *scroll = [[UIScrollView alloc] initWithFrame:CGRectMake(0, 0, w, h)];
+static UIScrollView *BDNewScroll(UIViewController *vc) {
+    UIScrollView *scroll = [[UIScrollView alloc] initWithFrame:CGRectMake(0, 0, vc.view.bounds.size.width,
+                                                                          vc.view.bounds.size.height)];
     scroll.showsVerticalScrollIndicator = YES;
     if (@available(iOS 13.0, *)) scroll.automaticallyAdjustsScrollIndicatorInsets = NO;
+    scroll.translatesAutoresizingMaskIntoConstraints = NO;
+    // 四边钉在 safeAreaLayoutGuide 上——导航栏/状态栏/Home 条高度全由系统维护
+    [NSLayoutConstraint activateConstraints:@[
+        [scroll.topAnchor      constraintEqualToAnchor:vc.view.safeAreaLayoutGuide.topAnchor],
+        [scroll.bottomAnchor   constraintEqualToAnchor:vc.view.safeAreaLayoutGuide.bottomAnchor],
+        [scroll.leadingAnchor  constraintEqualToAnchor:vc.view.safeAreaLayoutGuide.leadingAnchor],
+        [scroll.trailingAnchor constraintEqualToAnchor:vc.view.safeAreaLayoutGuide.trailingAnchor],
+    ]];
+    [vc.view addSubview:scroll];
+    return scroll;
+}
 
-    // ── 大标题区 ──
-    UILabel *big = [[UILabel alloc] initWithFrame:CGRectMake(15, 6, w - 30, 34)];
-    big.font = [UIFont systemFontOfSize:28 weight:UIFontWeightBold];
-    big.text = @"BubbleDeck";
-    [scroll addSubview:big];
+// 子页导航头（返回 + 标题），返回 y 增量
+static CGFloat BDNavHeader(UIViewController *vc, UIScrollView *scroll, NSString *title) {
+    CGFloat w = vc.view.bounds.size.width;
 
-    UILabel *sub = [[UILabel alloc] initWithFrame:CGRectMake(15, 44, w - 30, 18)];
-    sub.font = [UIFont systemFontOfSize:13];
-    sub.textColor = BDSecondaryText();
-    sub.text = packs.count
-        ? [NSString stringWithFormat:@"v%@ · 已安装 %lu 个气泡包", kTDVersion, (unsigned long)packs.count]
-        : [NSString stringWithFormat:@"v%@ · 未安装任何气泡包", kTDVersion];
-    [scroll addSubview:sub];
+    UIControl *back = [[UIControl alloc] initWithFrame:CGRectMake(4, 0, 60, 44)];
+    UILabel *chev = [[UILabel alloc] initWithFrame:CGRectMake(8, 0, 24, 44)];
+    chev.text = @"‹";
+    chev.font = [UIFont boldSystemFontOfSize:26];
+    chev.textColor = BDTint();
+    chev.textAlignment = NSTextAlignmentCenter;
+    [back addSubview:chev];
+    objc_setAssociatedObject(back, "view", vc, OBJC_ASSOCIATION_ASSIGN);
+    [back addTarget:vc action:NSSelectorFromString(@"bdBackTap:")
+   forControlEvents:UIControlEventTouchUpInside];
+    [scroll addSubview:back];
 
-    CGFloat y = 74;
-    CGFloat wIn = w - 30;
+    UILabel *lb = [[UILabel alloc] initWithFrame:CGRectMake(64, 0, w - 80, 44)];
+    lb.font = [UIFont systemFontOfSize:20 weight:UIFontWeightSemibold];
+    lb.text = title;
+    [scroll addSubview:lb];
+    return 52;
+}
 
-    // 首卡：微信默认
-    {
-        UIView *card = BDMakeCard(y, w, nil, @"微信默认",
-                                  @"不使用任何气泡包，恢复微信原生气泡",
-                                  nil, active == nil);
-        objc_setAssociatedObject(card, "pack", nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        UITapGestureRecognizer *gr = [[UITapGestureRecognizer alloc]
-            initWithTarget:vc action:NSSelectorFromString(@"bdCardTap:")];
+// 空状态提示卡
+static CGFloat BDEmptyHint(UIViewController *vc, UIScrollView *scroll, CGFloat y, NSString *text) {
+    CGFloat w = vc.view.bounds.size.width;
+    UIView *card = [[UIView alloc] initWithFrame:CGRectMake(15, y, w - 30, 84)];
+    card.backgroundColor = BDCardBg();
+    card.layer.cornerRadius = 15;
+    card.layer.borderWidth = 1;
+    card.layer.borderColor = [BDSecondaryText() colorWithAlphaComponent:0.25].CGColor;
+    UILabel *lb = [[UILabel alloc] initWithFrame:CGRectMake(16, 0, w - 62, 84)];
+    lb.font = [UIFont systemFontOfSize:13];
+    lb.textColor = BDSecondaryText();
+    lb.textAlignment = NSTextAlignmentCenter;
+    lb.numberOfLines = 0;
+    lb.text = text;
+    [card addSubview:lb];
+    [scroll addSubview:card];
+    return y + 84 + 12;
+}
+
+// 页脚
+static CGFloat BDFooter(UIViewController *vc, UIScrollView *scroll, CGFloat y) {
+    UILabel *foot = [[UILabel alloc] initWithFrame:CGRectMake(0, y + 4, vc.view.bounds.size.width, 20)];
+    foot.font = [UIFont systemFontOfSize:12];
+    foot.textColor = BDSecondaryText();
+    foot.textAlignment = NSTextAlignmentCenter;
+    foot.text = @"BubbleDeck · 本地气泡引擎";
+    [scroll addSubview:foot];
+    return y + 32;
+}
+
+// 通用行卡（左标题 + 右侧控件区已由调用方布置；高度 46，点按手势由调用方挂）
+static UIView *BDRowCard(UIViewController *vc, UIScrollView *scroll, CGFloat y,
+                         NSString *title, SEL tapSel) {
+    CGFloat w = vc.view.bounds.size.width;
+    UIView *card = [[UIView alloc] initWithFrame:CGRectMake(15, y, w - 30, 46)];
+    card.backgroundColor = BDCardBg();
+    card.layer.cornerRadius = 15;
+
+    UILabel *lb = [[UILabel alloc] initWithFrame:CGRectMake(16, 0, w - 100, 46)];
+    lb.font = [UIFont systemFontOfSize:15];
+    lb.text = title;
+    [card addSubview:lb];
+
+    UILabel *chev = [[UILabel alloc] initWithFrame:CGRectMake(w - 60, 0, 30, 46)];
+    chev.text = @"›";
+    chev.font = [UIFont systemFontOfSize:20];
+    chev.textColor = BDSecondaryText();
+    chev.textAlignment = NSTextAlignmentCenter;
+    [card addSubview:chev];
+
+    if (tapSel) {
+        UITapGestureRecognizer *gr = [[UITapGestureRecognizer alloc] initWithTarget:vc action:tapSel];
         [card addGestureRecognizer:gr];
-        [scroll addSubview:card];
-        y += 76 + 12;
+    }
+    [scroll addSubview:card];
+    return card;
+}
+
+// ────── 主页 ──────
+
+static void BDBuildMainPage(UIViewController *vc) {
+    CGFloat w = vc.view.bounds.size.width;
+    UIScrollView *scroll = BDNewScroll(vc);
+    if (!s_dlButtons) s_dlButtons = [NSMutableDictionary dictionary];
+    [s_dlButtons removeAllObjects];
+
+    CGFloat wIn = w - 30;
+    CGFloat y = 8;
+
+    // ── 头部：图标 + 名称 + 版本 + 状态胶囊 ──
+    {
+        CGFloat logoSize = 56;
+        UIView *logo = [[UIView alloc] initWithFrame:CGRectMake((w - logoSize) / 2, y, logoSize, logoSize)];
+        logo.backgroundColor = BDTint();
+        logo.layer.cornerRadius = 14;
+        UILabel *bl = [[UILabel alloc] initWithFrame:logo.bounds];
+        bl.text = @"B";
+        bl.font = [UIFont boldSystemFontOfSize:30];
+        bl.textColor = [UIColor whiteColor];
+        bl.textAlignment = NSTextAlignmentCenter;
+        [logo addSubview:bl];
+        [scroll addSubview:logo];
+        y += logoSize + 8;
+
+        UILabel *name = [[UILabel alloc] initWithFrame:CGRectMake(0, y, w, 30)];
+        name.font = [UIFont systemFontOfSize:24 weight:UIFontWeightBold];
+        name.textAlignment = NSTextAlignmentCenter;
+        name.text = @"BubbleDeck";
+        [scroll addSubview:name];
+        y += 32;
+
+        UILabel *ver = [[UILabel alloc] initWithFrame:CGRectMake(0, y, w, 18)];
+        ver.font = [UIFont systemFontOfSize:13];
+        ver.textColor = BDSecondaryText();
+        ver.textAlignment = NSTextAlignmentCenter;
+        ver.text = [NSString stringWithFormat:@"v%@", kTDVersion];
+        [scroll addSubview:ver];
+        y += 24;
+
+        NSString *pillText;
+        BOOL pillActive = NO;
+        if (![TDConfig pluginEnabled]) {
+            pillText = @"插件已停用";
+        } else if ([TDConfig activePack]) {
+            pillText = [NSString stringWithFormat:@"使用中：%@", [TDConfig activePack]];
+            pillActive = YES;
+        } else {
+            pillText = @"未选择气泡";
+        }
+        CGFloat pillW = [pillText sizeWithAttributes:@{NSFontAttributeName: [UIFont systemFontOfSize:12]}].width + 24;
+        UILabel *pill = [[UILabel alloc] initWithFrame:CGRectMake((w - pillW) / 2, y, pillW, 24)];
+        pill.font = [UIFont systemFontOfSize:12 weight:UIFontWeightMedium];
+        pill.textAlignment = NSTextAlignmentCenter;
+        pill.text = pillText;
+        pill.layer.cornerRadius = 12;
+        pill.clipsToBounds = YES;
+        pill.textColor = pillActive ? [UIColor whiteColor] : BDSecondaryText();
+        pill.backgroundColor = pillActive ? BDTint() : BDPlaceholderBg();
+        [scroll addSubview:pill];
+        y += 36;
     }
 
-    if (packs.count == 0) {
-        // 空状态引导卡
-        UIView *card = [[UIView alloc] initWithFrame:CGRectMake(15, y, wIn, 92)];
+    // ── 启用插件卡：总开关 + 三入口 ──
+    {
+        UIView *card = [[UIView alloc] initWithFrame:CGRectMake(15, y, wIn, 128)];
         card.backgroundColor = BDCardBg();
         card.layer.cornerRadius = 15;
-        UILabel *lb = [[UILabel alloc] initWithFrame:CGRectMake(16, 0, wIn - 32, 92)];
-        lb.font = [UIFont systemFontOfSize:13];
-        lb.textColor = BDSecondaryText();
-        lb.numberOfLines = 0;
-        lb.text = @"将气泡包文件夹放入\nDocuments/BubbleDeck/packs/\n（含 info.json 的目录）\n然后点「重新加载」";
-        [card addSubview:lb];
-        [scroll addSubview:card];
-        y += 92 + 12;
-    } else {
-        for (NSString *name in packs) {
-            NSString *dir = [TDPackLoader packDirForName:name];
-            NSString *subtitle = [NSString stringWithFormat:@"%ld 图",
-                                  dir ? (long)BDPackImageCount(dir) : 0L];
-            UIImage *thumb = dir
-                ? [UIImage imageWithContentsOfFile:[dir stringByAppendingPathComponent:@"icon.png"]]
-                : nil;
-            BOOL isActive = [active isEqualToString:name];
 
-            UIView *card = BDMakeCard(y, w, name, name, subtitle, thumb, isActive);
-            UITapGestureRecognizer *gr = [[UITapGestureRecognizer alloc]
-                initWithTarget:vc action:NSSelectorFromString(@"bdCardTap:")];
-            [card addGestureRecognizer:gr];
-            [scroll addSubview:card];
-            y += 76 + 12;
+        UILabel *lb = [[UILabel alloc] initWithFrame:CGRectMake(16, 0, wIn - 100, 48)];
+        lb.font = [UIFont systemFontOfSize:15];
+        lb.text = @"启用插件";
+        [card addSubview:lb];
+
+        UISwitch *sw = [[UISwitch alloc] initWithFrame:CGRectMake(wIn - 66, 8, 51, 31)];
+        sw.on = [TDConfig pluginEnabled];
+        [sw addTarget:vc action:NSSelectorFromString(@"bdEnableSwitch:")
+         forControlEvents:UIControlEventValueChanged];
+        objc_setAssociatedObject(sw, "view", vc, OBJC_ASSOCIATION_ASSIGN);
+        [card addSubview:sw];
+
+        // 三入口：下载气泡 / 更换气泡 / 设置中心
+        NSArray *titles = @[@"下载气泡", @"更换气泡", @"设置中心"];
+        NSArray *symbols = @[@"arrow.down.circle", @"paintbrush", @"gear"];
+        CGFloat btnW = (wIn - 32 - 16) / 3;
+        for (NSInteger i = 0; i < 3; i++) {
+            UIControl *btn = [[UIControl alloc] initWithFrame:CGRectMake(16 + i * (btnW + 8), 54, btnW, 62)];
+            btn.backgroundColor = BDPlaceholderBg();
+            btn.layer.cornerRadius = 12;
+
+            CGFloat iy = 8;
+            if (@available(iOS 13.0, *)) {
+                UIImage *img = [UIImage systemImageNamed:symbols[i]];
+                if (img) {
+                    UIImageView *iv = [[UIImageView alloc] initWithImage:img];
+                    iv.frame = CGRectMake((btnW - 24) / 2, iy, 24, 24);
+                    iv.tintColor = [UIColor labelColor];
+                    [btn addSubview:iv];
+                }
+                iy += 28;
+            } else {
+                iy += 12;
+            }
+            UILabel *tl = [[UILabel alloc] initWithFrame:CGRectMake(0, iy, btnW, 18)];
+            tl.font = [UIFont systemFontOfSize:12];
+            tl.textAlignment = NSTextAlignmentCenter;
+            tl.text = titles[i];
+            [btn addSubview:tl];
+
+            objc_setAssociatedObject(btn, "page", @(i + 1), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            [btn addTarget:vc action:NSSelectorFromString(@"bdIconTap:")
+          forControlEvents:UIControlEventTouchUpInside];
+            [card addSubview:btn];
         }
+        [scroll addSubview:card];
+        y += 128 + 12;
     }
 
-    // ── 在线包区（V2 橱窗：未拥有可看+输码激活；owned 可下载；已装未授权=已失效） ──
-    {
-        UILabel *sec = [[UILabel alloc] initWithFrame:CGRectMake(15, y + 2, wIn, 18)];
-        sec.font = [UIFont systemFontOfSize:13];
-        sec.textColor = BDSecondaryText();
-        sec.text = @"在线气泡包";
-        [scroll addSubview:sec];
-        y += 26;
+    // ── 兑换激活码行 ──
+    BDRowCard(vc, scroll, y, @"兑换激活码", NSSelectorFromString(@"bdRedeemTap:"));
+    y += 46 + 12;
 
-        NSArray<NSDictionary *> *ents = [TDLicense entitlements];
-        if (!ents && !s_triedFetch) {
-            s_triedFetch = YES;
-            BDFetchEntitlements(vc);
+    y = BDFooter(vc, scroll, y);
+    scroll.contentSize = CGSizeMake(w, y);
+}
+
+// ────── 商店页（只列 owned） ──────
+
+static void BDBuildStorePage(UIViewController *vc) {
+    CGFloat w = vc.view.bounds.size.width;
+    UIScrollView *scroll = BDNewScroll(vc);
+    if (!s_dlButtons) s_dlButtons = [NSMutableDictionary dictionary];
+    [s_dlButtons removeAllObjects];
+
+    CGFloat wIn = w - 30;
+    CGFloat y = BDNavHeader(vc, scroll, @"在线气泡包");
+
+    NSArray<NSString *> *packs = [TDConfig availablePacks];
+    NSSet<NSString *> *installed = [NSSet setWithArray:packs];
+    NSArray<NSDictionary *> *ents = [TDLicense entitlements];
+
+    // 首次进页拉清单（成功/失败回调重建本页）
+    if (!ents && !s_triedFetch && !s_fetchingEnts) {
+        s_triedFetch = YES;
+        BDFetchEntitlements(vc);
+    }
+
+    if (!ents) {
+        NSString *hint = s_fetchingEnts ? @"正在获取在线包列表…"
+                                        : @"连接服务器失败，请稍后重试";
+        UILabel *lb = [[UILabel alloc] initWithFrame:CGRectMake(15, y + 8, wIn, 24)];
+        lb.font = [UIFont systemFontOfSize:13];
+        lb.textColor = BDSecondaryText();
+        lb.textAlignment = NSTextAlignmentCenter;
+        lb.text = hint;
+        [scroll addSubview:lb];
+        y += 32;
+    } else {
+        // 只显示 owned（未拥有/已失效一律不出现）
+        NSMutableArray<NSDictionary *> *owned = [NSMutableArray array];
+        for (NSDictionary *p in ents) {
+            if ([p isKindOfClass:[NSDictionary class]] && [p[@"owned"] boolValue]) [owned addObject:p];
         }
-        if (!ents) {
-            UILabel *hint = [[UILabel alloc] initWithFrame:CGRectMake(15, y, wIn, 40)];
-            hint.font = [UIFont systemFontOfSize:13];
-            hint.textColor = BDSecondaryText();
-            hint.textAlignment = NSTextAlignmentCenter;
-            hint.text = s_fetchingEnts ? @"正在获取在线包列表…" : @"连接服务器失败，稍后再进本页重试";
-            [scroll addSubview:hint];
-            y += 40 + 12;
-        } else if (ents.count == 0) {
-            UILabel *hint = [[UILabel alloc] initWithFrame:CGRectMake(15, y, wIn, 40)];
-            hint.font = [UIFont systemFontOfSize:13];
-            hint.textColor = BDSecondaryText();
-            hint.textAlignment = NSTextAlignmentCenter;
-            hint.text = @"暂无可下载的气泡包";
-            [scroll addSubview:hint];
-            y += 40 + 12;
+
+        if (owned.count == 0) {
+            y = BDEmptyHint(vc, scroll, y,
+                            @"还没有可用的气泡包\n回主页「兑换激活码」入账后出现在这里");
         } else {
-            NSSet<NSString *> *installed = [NSSet setWithArray:packs];
             BOOL highlighted = NO;
-            for (NSDictionary *p in ents) {
+            for (NSDictionary *p in owned) {
                 NSString *name = [p[@"name"] isKindOfClass:[NSString class]] ? p[@"name"] : @"";
                 if (!name.length) continue;
-                BOOL owned = [p[@"owned"] boolValue];
                 BOOL has = [installed containsObject:name];
                 BOOL busy = [s_downloading isEqualToString:name];
                 // 引导高亮：第一个 owned 且未安装的包（下一步动作）
-                BOOL firstTodo = owned && !has && !busy && !highlighted && !s_downloading;
+                BOOL firstTodo = !has && !busy && !highlighted && !s_downloading;
 
                 UIView *card = [[UIView alloc] initWithFrame:CGRectMake(15, y, wIn, 64)];
                 card.backgroundColor = BDCardBg();
@@ -389,8 +547,8 @@ static void BDBuildPage(UIViewController *vc) {
                 if (@available(iOS 13.0, *)) {
                     card.layer.cornerCurve = kCACornerCurveContinuous;
                     if (firstTodo) {
-                        card.layer.borderWidth = 1.5;   // 引导：高亮第一个 owned 未安装包
-                        card.layer.borderColor = [UIColor systemBlueColor].CGColor;
+                        card.layer.borderWidth = 1.5;
+                        card.layer.borderColor = BDTint().CGColor;
                     }
                 }
 
@@ -411,43 +569,24 @@ static void BDBuildPage(UIViewController *vc) {
                 dl.layer.cornerRadius = 10;
                 dl.titleLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
                 if (has) {
-                    if (owned) {
-                        [dl setTitle:@"已安装" forState:UIControlStateNormal];
-                        dl.enabled = NO;
-                        if (@available(iOS 13.0, *)) dl.backgroundColor = [UIColor tertiarySystemFillColor];
-                        else dl.backgroundColor = [UIColor colorWithWhite:0.9 alpha:1.0];
-                    } else {
-                        // 在线装过但授权没了（封卡/换号）：闸门已停用，提示状态
-                        [dl setTitle:@"已失效" forState:UIControlStateNormal];
-                        [dl setTitleColor:[UIColor systemRedColor] forState:UIControlStateNormal];
-                        dl.enabled = NO;
-                        if (@available(iOS 13.0, *)) dl.backgroundColor = [UIColor tertiarySystemFillColor];
-                        else dl.backgroundColor = [UIColor colorWithWhite:0.9 alpha:1.0];
-                    }
+                    [dl setTitle:@"已安装" forState:UIControlStateNormal];
+                    dl.enabled = NO;
+                    if (@available(iOS 13.0, *)) dl.backgroundColor = [UIColor tertiarySystemFillColor];
+                    else dl.backgroundColor = [UIColor colorWithWhite:0.9 alpha:1.0];
                 } else if (busy) {
                     [dl setTitle:[NSString stringWithFormat:@"%.0f%%", s_dlProgress * 100]
                         forState:UIControlStateNormal];
                     dl.enabled = NO;
                     if (@available(iOS 13.0, *)) dl.backgroundColor = [UIColor tertiarySystemFillColor];
                     else dl.backgroundColor = [UIColor colorWithWhite:0.9 alpha:1.0];
-                } else if (owned) {
+                } else {
                     [dl setTitle:@"下载" forState:UIControlStateNormal];
-                    if (@available(iOS 13.0, *)) dl.backgroundColor = [UIColor systemBlueColor];
-                    else dl.backgroundColor = [UIColor colorWithRed:0.0 green:0.48 blue:1.0 alpha:1.0];
+                    dl.backgroundColor = BDTint();
                     dl.tintColor = [UIColor whiteColor];
                     objc_setAssociatedObject(dl, "pack", name, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
                     [dl addTarget:vc action:NSSelectorFromString(@"bdDownloadTap:")
                    forControlEvents:UIControlEventTouchUpInside];
                     s_dlButtons[name] = dl;
-                } else {
-                    // 未拥有：橱窗展示，行内输码激活
-                    [dl setTitle:@"输码激活" forState:UIControlStateNormal];
-                    if (@available(iOS 13.0, *)) dl.backgroundColor = [UIColor systemBlueColor];
-                    else dl.backgroundColor = [UIColor colorWithRed:0.0 green:0.48 blue:1.0 alpha:1.0];
-                    dl.tintColor = [UIColor whiteColor];
-                    objc_setAssociatedObject(dl, "pack", name, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-                    [dl addTarget:vc action:NSSelectorFromString(@"bdActivateTap:")
-                   forControlEvents:UIControlEventTouchUpInside];
                 }
                 [card addSubview:dl];
                 [scroll addSubview:card];
@@ -457,61 +596,169 @@ static void BDBuildPage(UIViewController *vc) {
         }
     }
 
-    // ── 工具行：重新加载 / 日志开关 ──
-    UIView *tools = [[UIView alloc] initWithFrame:CGRectMake(15, y, wIn, 110)];
-    tools.backgroundColor = BDCardBg();
-    tools.layer.cornerRadius = 15;
+    y = BDFooter(vc, scroll, y);
+    scroll.contentSize = CGSizeMake(w, y);
+}
 
-    UIButton *reload = [UIButton buttonWithType:UIButtonTypeSystem];
-    reload.frame = CGRectMake(16, 12, wIn - 32, 38);
-    reload.backgroundColor = [UIColor systemBlueColor];
-    reload.layer.cornerRadius = 10;
-    reload.tintColor = [UIColor whiteColor];
-    reload.titleLabel.font = [UIFont systemFontOfSize:14 weight:UIFontWeightMedium];
-    [reload setTitle:@"重新加载" forState:UIControlStateNormal];
-    [reload addTarget:vc action:NSSelectorFromString(@"bdReloadTap:")
-     forControlEvents:UIControlEventTouchUpInside];
-    [tools addSubview:reload];
+// ────── 主题页（只列已下载且授权有效） ──────
 
-    UILabel *logLb = [[UILabel alloc] initWithFrame:CGRectMake(16, 62, wIn - 90, 34)];
-    logLb.font = [UIFont systemFontOfSize:14];
-    logLb.text = @"日志记录";
-    [tools addSubview:logLb];
+static void BDBuildThemePage(UIViewController *vc) {
+    CGFloat w = vc.view.bounds.size.width;
+    UIScrollView *scroll = BDNewScroll(vc);
+    if (!s_dlButtons) s_dlButtons = [NSMutableDictionary dictionary];
+    [s_dlButtons removeAllObjects];
 
-    UISwitch *logSw = [[UISwitch alloc] initWithFrame:CGRectMake(wIn - 66, 63, 51, 31)];
-    logSw.on = [_TDLogManager fileLoggingEnabled];
-    [logSw addTarget:vc action:NSSelectorFromString(@"bdLogSwitch:")
-     forControlEvents:UIControlEventValueChanged];
-    objc_setAssociatedObject(logSw, "view", vc, OBJC_ASSOCIATION_ASSIGN);
-    [tools addSubview:logSw];
+    CGFloat wIn = w - 30;
+    CGFloat y = BDNavHeader(vc, scroll, @"选择气泡");
 
-    [scroll addSubview:tools];
-    y += 110 + 12;
+    NSString *active = [TDConfig activePack];
+    NSArray<NSString *> *packs = [TDConfig availablePacks];
+    // 激活名在包列表里不存在 = 配置残留，按未激活处理并清理
+    if (active && ![packs containsObject:active]) {
+        TDLog(@"DEV", @"[activePack] 指向不存在的包 %@，清理", active);
+        [TDConfig setActivePack:nil];
+        active = nil;
+    }
 
-    // 页脚
-    UILabel *foot = [[UILabel alloc] initWithFrame:CGRectMake(0, y + 4, w, 20)];
-    foot.font = [UIFont systemFontOfSize:12];
-    foot.textColor = BDSecondaryText();
-    foot.textAlignment = NSTextAlignmentCenter;
-    foot.text = @"BubbleDeck · 本地气泡引擎";
-    [scroll addSubview:foot];
-    scroll.contentSize = CGSizeMake(w, y + 32);
+    // 微信默认卡
+    UIView *card = BDMakeCard(y, w, nil, @"微信默认",
+                              @"不使用任何气泡包，恢复微信原生气泡",
+                              nil, active == nil);
+    UITapGestureRecognizer *dgr = [[UITapGestureRecognizer alloc]
+        initWithTarget:vc action:NSSelectorFromString(@"bdCardTap:")];
+    [card addGestureRecognizer:dgr];
+    [scroll addSubview:card];
+    y += 76 + 12;
 
-    [vc.view addSubview:scroll];
+    // 只显示已下载且授权有效的包：在线来源但闸门关闭（封卡/换号/离线超期）的包不出现
+    BOOL anyShown = NO;
+    for (NSString *name in packs) {
+        if ([[TDConfig sourceForPack:name] isEqualToString:@"online"]
+            && ![TDLicense gateOpenForPack:name]) continue;
 
-    // 方案 B：scroll 四边钉在 safeAreaLayoutGuide 上——导航栏/状态栏/Home 条
-    // 高度全由系统维护，内容从 y=0 起画，无快照、无兜底、无双重计算
-    scroll.translatesAutoresizingMaskIntoConstraints = NO;
-    [NSLayoutConstraint activateConstraints:@[
-        [scroll.topAnchor      constraintEqualToAnchor:vc.view.safeAreaLayoutGuide.topAnchor],
-        [scroll.bottomAnchor   constraintEqualToAnchor:vc.view.safeAreaLayoutGuide.bottomAnchor],
-        [scroll.leadingAnchor  constraintEqualToAnchor:vc.view.safeAreaLayoutGuide.leadingAnchor],
-        [scroll.trailingAnchor constraintEqualToAnchor:vc.view.safeAreaLayoutGuide.trailingAnchor],
-    ]];
+        NSString *dir = [TDPackLoader packDirForName:name];
+        NSString *subtitle = [NSString stringWithFormat:@"%ld 图",
+                              dir ? (long)BDPackImageCount(dir) : 0L];
+        UIImage *thumb = dir
+            ? [UIImage imageWithContentsOfFile:[dir stringByAppendingPathComponent:@"icon.png"]]
+            : nil;
+
+        UIView *c = BDMakeCard(y, w, name, name, subtitle, thumb, [active isEqualToString:name]);
+        UITapGestureRecognizer *gr = [[UITapGestureRecognizer alloc]
+            initWithTarget:vc action:NSSelectorFromString(@"bdCardTap:")];
+        [c addGestureRecognizer:gr];
+        [scroll addSubview:c];
+        y += 76 + 12;
+        anyShown = YES;
+    }
+
+    if (!anyShown) {
+        y = BDEmptyHint(vc, scroll, y,
+                        @"还没有已下载的气泡包\n先回主页「下载气泡」获取");
+    }
+
+    y = BDFooter(vc, scroll, y);
+    scroll.contentSize = CGSizeMake(w, y);
+}
+
+// ────── 设置页 ──────
+
+static void BDBuildSettingsPage(UIViewController *vc) {
+    CGFloat w = vc.view.bounds.size.width;
+    UIScrollView *scroll = BDNewScroll(vc);
+    if (!s_dlButtons) s_dlButtons = [NSMutableDictionary dictionary];
+    [s_dlButtons removeAllObjects];
+
+    CGFloat wIn = w - 30;
+    CGFloat y = BDNavHeader(vc, scroll, @"设置中心");
+
+    // 日志开关卡
+    {
+        UIView *card = [[UIView alloc] initWithFrame:CGRectMake(15, y, wIn, 46)];
+        card.backgroundColor = BDCardBg();
+        card.layer.cornerRadius = 15;
+
+        UILabel *lb = [[UILabel alloc] initWithFrame:CGRectMake(16, 0, wIn - 100, 46)];
+        lb.font = [UIFont systemFontOfSize:15];
+        lb.text = @"日志记录";
+        [card addSubview:lb];
+
+        UISwitch *logSw = [[UISwitch alloc] initWithFrame:CGRectMake(wIn - 66, 8, 51, 31)];
+        logSw.on = [_TDLogManager fileLoggingEnabled];
+        [logSw addTarget:vc action:NSSelectorFromString(@"bdLogSwitch:")
+         forControlEvents:UIControlEventValueChanged];
+        objc_setAssociatedObject(logSw, "view", vc, OBJC_ASSOCIATION_ASSIGN);
+        [card addSubview:logSw];
+        [scroll addSubview:card];
+        y += 46 + 12;
+    }
+
+    // 重新加载行
+    BDRowCard(vc, scroll, y, @"重新加载气泡包", NSSelectorFromString(@"bdReloadTap:"));
+    y += 46 + 12;
+
+    // 关于卡
+    {
+        UIView *card = [[UIView alloc] initWithFrame:CGRectMake(15, y, wIn, 64)];
+        card.backgroundColor = BDCardBg();
+        card.layer.cornerRadius = 15;
+
+        UILabel *lb = [[UILabel alloc] initWithFrame:CGRectMake(16, 11, wIn - 32, 20)];
+        lb.font = [UIFont systemFontOfSize:15];
+        lb.text = [NSString stringWithFormat:@"BubbleDeck v%@", kTDVersion];
+        [card addSubview:lb];
+
+        UILabel *sb = [[UILabel alloc] initWithFrame:CGRectMake(16, 34, wIn - 32, 16)];
+        sb.font = [UIFont systemFontOfSize:12];
+        sb.textColor = BDSecondaryText();
+        sb.text = [NSString stringWithFormat:@"设备尾号 %@", [TDLicense deviceTail]];
+        [card addSubview:sb];
+        [scroll addSubview:card];
+        y += 64 + 12;
+    }
+
+    y = BDFooter(vc, scroll, y);
+    scroll.contentSize = CGSizeMake(w, y);
+}
+
+// ────── 页面分发 ──────
+
+static void BDBuildPage(UIViewController *vc) {
+    // 移除旧 UI（重建）
+    for (UIView *sub in vc.view.subviews) [sub removeFromSuperview];
+
+    switch (s_page) {
+        case 1:  BDBuildStorePage(vc);    break;
+        case 2:  BDBuildThemePage(vc);    break;
+        case 3:  BDBuildSettingsPage(vc); break;
+        default: BDBuildMainPage(vc);     break;
+    }
 }
 
 // ────── 交互处理（注册在类对上的实例方法） ──────
 
+// 总开关
+static void bdEnableSwitch(id self, SEL _cmd, UISwitch *sw) {
+    UIViewController *vc = (UIViewController *)self;
+    [TDConfig setPluginEnabled:sw.on];
+    TDLog(@"DEV", @"[Plugin] 总开关 %@", sw.on ? @"开" : @"关");
+    BDBuildPage(vc);
+}
+
+// 主页三入口
+static void bdIconTap(id self, SEL _cmd, UIControl *btn) {
+    NSNumber *page = objc_getAssociatedObject(btn, "page");
+    s_page = page.integerValue;
+    BDBuildPage((UIViewController *)self);
+}
+
+// 子页返回
+static void bdBackTap(id self, SEL _cmd, UIControl *btn) {
+    s_page = 0;
+    BDBuildPage((UIViewController *)self);
+}
+
+// 主题页卡片：启用 / 恢复默认
 static void bdCardTap(id self, SEL _cmd, UITapGestureRecognizer *gr) {
     UIViewController *vc = (UIViewController *)self;
     NSString *pack = objc_getAssociatedObject(gr.view, "pack");
@@ -535,12 +782,11 @@ static void bdCardTap(id self, SEL _cmd, UITapGestureRecognizer *gr) {
 
     if ([pack isEqualToString:active]) return; // 已在使用，无操作
 
-    // 在线包闸门联动：授权没了（封卡/换号/离线超 7 天）不给启用
+    // 安全网：主题页理论上只显示闸门放行的包，这里再拦一次（授权可能在页面停留期间失效）
     if ([[TDConfig sourceForPack:pack] isEqualToString:@"online"]
         && ![TDLicense gateOpenForPack:pack]) {
         UIAlertController *a = [UIAlertController alertControllerWithTitle:@"授权不可用"
-            message:[NSString stringWithFormat:@"「%@」当前无有效授权：激活码可能已绑定其他微信号或被封禁，"
-                     @"也可能是离线超过 7 天。可重新购买激活码，或联网后重试。", pack]
+            message:[NSString stringWithFormat:@"「%@」当前无有效授权，请联网后重试或重新购买激活码。", pack]
             preferredStyle:UIAlertControllerStyleAlert];
         [a addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleCancel handler:nil]];
         [vc presentViewController:a animated:YES completion:nil];
@@ -559,35 +805,79 @@ static void bdCardTap(id self, SEL _cmd, UITapGestureRecognizer *gr) {
     [vc presentViewController:alert animated:YES completion:nil];
 }
 
+// 设置页：重新加载
 static void bdReloadTap(id self, SEL _cmd, UIButton *btn) {
     UIViewController *vc = (UIViewController *)self;
-    [TDBubbleEngine purgeCaches];       // 顺带清负缓存，包内容变更即时生效
-    s_triedFetch = NO;                  // 在线清单允许重试（后台新登记的包/新买的码能刷出来）
-    BDBuildPage(vc);
+    [TDBubbleEngine purgeCaches];       // 清负缓存，包内容变更即时生效
+    s_triedFetch = NO;                  // 在线清单允许重试
+    UIAlertController *a = [UIAlertController alertControllerWithTitle:@"已重新加载"
+        message:[NSString stringWithFormat:@"当前 %lu 个气泡包可用。",
+                 (unsigned long)[TDConfig availablePacks].count]
+        preferredStyle:UIAlertControllerStyleAlert];
+    [a addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleCancel handler:nil]];
+    [vc presentViewController:a animated:YES completion:nil];
     TDLog(@"DEV", @"[Pack] 重新加载，packs=%@", [TDConfig availablePacks]);
 }
 
+// 设置页：日志开关
 static void bdLogSwitch(id self, SEL _cmd, UISwitch *sw) {
     [_TDLogManager setFileLoggingEnabled:sw.on];
     TDLog(@"DEV", @"[Log] 文件日志 %@", sw.on ? @"开" : @"关");
 }
 
-// ────── 在线包与激活（交互处理，V2：activate + packs 两接口） ──────
+// 主页：兑换激活码（激活唯一入口）→ 成功自动跳商店页
+static void bdRedeemTap(id self, SEL _cmd, UIControl *btn) {
+    UIViewController *vc = (UIViewController *)self;
 
-// 启动报到：拉 owned 清单缓存；成功/失败都回调重建页面（失败保持提示，下次进页重试）
-static void BDFetchEntitlements(UIViewController *vc) {
-    if (s_fetchingEnts) return;
-    s_fetchingEnts = YES;
-    __weak UIViewController *wv = vc;
-    [TDLicense refreshEntitlementsWithCompletion:^(BOOL ok) {
-        s_fetchingEnts = NO;
-        if (ok) TDLog(@"LIC", @"[Ents] 清单已刷新");
-        UIViewController *v = wv;
-        if (v && v.isViewLoaded && v.view.window) BDBuildPage(v);
+    // 绑定主键就是 wxid：抓不到（未登录/早期）直接本地拦，不给发请求
+    if (![TDLicense currentWxid]) {
+        UIAlertController *a = [UIAlertController alertControllerWithTitle:@"无法激活"
+            message:@"请先登录微信后再激活（激活码会绑定当前微信号）"
+            preferredStyle:UIAlertControllerStyleAlert];
+        [a addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleCancel handler:nil]];
+        [vc presentViewController:a animated:YES completion:nil];
+        return;
+    }
+
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"兑换激活码"
+        message:@"输入气泡包激活码。激活后绑定当前微信号，永久有效，不可换绑。"
+        preferredStyle:UIAlertControllerStyleAlert];
+    [alert addTextFieldWithConfigurationHandler:^(UITextField *tf) {
+        tf.placeholder = @"XXXX-XXXX-XXXX-XXXX";
+        tf.autocapitalizationType = UITextAutocapitalizationTypeAllCharacters;
+        tf.autocorrectionType = UITextAutocorrectionTypeNo;
     }];
+    __weak UIViewController *wv = vc;
+    [alert addAction:[UIAlertAction actionWithTitle:@"激活" style:UIAlertActionStyleDefault
+        handler:^(__unused UIAlertAction *a) {
+        NSString *code = [alert.textFields.firstObject.text stringByTrimmingCharactersInSet:
+                          [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        if (!code.length) return;
+        TDLog(@"LIC", @"[Activate] 提交激活码（尾 4 位: %@）",
+              code.length >= 4 ? [code substringFromIndex:code.length - 4] : code);
+        [TDLicense activateLicense:code completion:^(BOOL ok, NSString *message) {
+            UIViewController *v = wv;
+            UIAlertController *done = [UIAlertController alertControllerWithTitle:
+                ok ? @"激活成功" : @"激活失败"
+                message:message
+                preferredStyle:UIAlertControllerStyleAlert];
+            [done addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleCancel
+                handler:^(__unused UIAlertAction *x) {
+                if (!ok) return;
+                UIViewController *v2 = wv;
+                if (v2 && v2.isViewLoaded) {
+                    s_page = 1;          // 跳商店页：新入账的包带着 [下载] 按钮等着
+                    BDBuildPage(v2);     // activate 内部已同步报到，重建即见
+                }
+            }]];
+            [v presentViewController:done animated:YES completion:nil];
+        }];
+    }]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
+    [vc presentViewController:alert animated:YES completion:nil];
 }
 
-// 下载：url/md5/key 直接取自缓存清单（owned 包），无需单独 download 接口
+// 商店页：下载（url/md5/key 直接取自缓存清单 owned 包）
 static void BDStartDownload(UIViewController *vc, NSString *name) {
     if (s_downloading || !name.length) return;
     NSDictionary *pack = nil;
@@ -619,65 +909,21 @@ static void BDStartDownload(UIViewController *vc, NSString *name) {
         if (v && v.isViewLoaded) {
             UIAlertController *a = [UIAlertController alertControllerWithTitle:
                 ok ? @"下载完成" : @"下载失败"
-                message:ok ? [NSString stringWithFormat:@"「%@」已安装，点击下方卡片即可启用。", name]
+                message:ok ? [NSString stringWithFormat:@"「%@」已安装，去「更换气泡」启用。", name]
                            : message
                 preferredStyle:UIAlertControllerStyleAlert];
-            [a addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleCancel handler:nil]];
+            [a addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleCancel
+                handler:^(__unused UIAlertAction *x) {
+                UIViewController *v2 = wv;
+                if (ok && v2 && v2.isViewLoaded) {
+                    s_page = 2;         // 跳主题页启用
+                    BDBuildPage(v2);
+                }
+            }]];
             [v presentViewController:a animated:YES completion:nil];
-            BDBuildPage(v);   // 新包进本地列表，气泡即刻可用
+            BDBuildPage(v);   // 先重建（下载行回「已安装」），再弹窗
         }
     }];
-}
-
-// 行内激活：弹窗输码 → /activate（wxid+IDFV 自动带）→ 成功自动刷新清单高亮
-static void bdActivateTap(id self, SEL _cmd, UIButton *btn) {
-    UIViewController *vc = (UIViewController *)self;
-    NSString *pack = objc_getAssociatedObject(btn, "pack");
-
-    // 绑定主键就是 wxid：抓不到（未登录/早期）直接本地拦，不给发请求
-    if (![TDLicense currentWxid]) {
-        UIAlertController *a = [UIAlertController alertControllerWithTitle:@"无法激活"
-            message:@"请先登录微信后再激活（激活码会绑定当前微信号）"
-            preferredStyle:UIAlertControllerStyleAlert];
-        [a addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleCancel handler:nil]];
-        [vc presentViewController:a animated:YES completion:nil];
-        return;
-    }
-
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:
-        [NSString stringWithFormat:@"激活「%@」", pack]
-        message:@"输入该气泡包的激活码。激活后绑定当前微信号，永久有效，不可换绑。"
-        preferredStyle:UIAlertControllerStyleAlert];
-    [alert addTextFieldWithConfigurationHandler:^(UITextField *tf) {
-        tf.placeholder = @"XXXX-XXXX-XXXX-XXXX";
-        tf.autocapitalizationType = UITextAutocapitalizationTypeAllCharacters;
-        tf.autocorrectionType = UITextAutocorrectionTypeNo;
-    }];
-    __weak UIViewController *wv = vc;
-    [alert addAction:[UIAlertAction actionWithTitle:@"激活" style:UIAlertActionStyleDefault
-        handler:^(__unused UIAlertAction *a) {
-        NSString *code = [alert.textFields.firstObject.text stringByTrimmingCharactersInSet:
-                          [NSCharacterSet whitespaceAndNewlineCharacterSet]];
-        if (!code.length) return;
-        TDLog(@"LIC", @"[Activate] 提交激活码（尾 4 位: %@）包: %@",
-              code.length >= 4 ? [code substringFromIndex:code.length - 4] : code, pack);
-        [TDLicense activateLicense:code completion:^(BOOL ok, NSString *message) {
-            UIViewController *v = wv;
-            UIAlertController *done = [UIAlertController alertControllerWithTitle:
-                ok ? @"激活成功" : @"激活失败"
-                message:message
-                preferredStyle:UIAlertControllerStyleAlert];
-            [done addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleCancel
-                handler:^(__unused UIAlertAction *x) {
-                if (!ok) return;
-                UIViewController *v2 = wv;
-                if (v2 && v2.isViewLoaded) BDBuildPage(v2);   // activate 内部已同步报到，重建即见[下载]
-            }]];
-            [v presentViewController:done animated:YES completion:nil];
-        }];
-    }]];
-    [alert addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
-    [vc presentViewController:alert animated:YES completion:nil];
 }
 
 static void bdDownloadTap(id self, SEL _cmd, UIButton *btn) {
@@ -769,10 +1015,13 @@ static void bdEntryViewWillDisappear(id self, SEL _cmd, BOOL animated) {
             class_addMethod(entryClass, NSSelectorFromString(@"viewWillAppear:"), (IMP)bdEntryViewWillAppear, "v@:B");
             class_addMethod(entryClass, NSSelectorFromString(@"viewDidAppear:"), (IMP)bdEntryViewDidAppear, "v@:B");
             class_addMethod(entryClass, NSSelectorFromString(@"viewWillDisappear:"), (IMP)bdEntryViewWillDisappear, "v@:B");
+            class_addMethod(entryClass, NSSelectorFromString(@"bdEnableSwitch:"), (IMP)bdEnableSwitch, "v@:@");
+            class_addMethod(entryClass, NSSelectorFromString(@"bdIconTap:"), (IMP)bdIconTap, "v@:@");
+            class_addMethod(entryClass, NSSelectorFromString(@"bdBackTap:"), (IMP)bdBackTap, "v@:@");
             class_addMethod(entryClass, NSSelectorFromString(@"bdCardTap:"), (IMP)bdCardTap, "v@:@");
             class_addMethod(entryClass, NSSelectorFromString(@"bdReloadTap:"), (IMP)bdReloadTap, "v@:@");
             class_addMethod(entryClass, NSSelectorFromString(@"bdLogSwitch:"), (IMP)bdLogSwitch, "v@:@");
-            class_addMethod(entryClass, NSSelectorFromString(@"bdActivateTap:"), (IMP)bdActivateTap, "v@:@");
+            class_addMethod(entryClass, NSSelectorFromString(@"bdRedeemTap:"), (IMP)bdRedeemTap, "v@:@");
             class_addMethod(entryClass, NSSelectorFromString(@"bdDownloadTap:"), (IMP)bdDownloadTap, "v@:@");
             objc_registerClassPair(entryClass);
         }
