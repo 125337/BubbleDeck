@@ -54,7 +54,8 @@ static NSString *KCGet(NSString *account) {
 static BOOL KCSet(NSString *account, NSString *value) {
     if (!value.length) { KCDelete(account); return YES; }
     NSDictionary *attrs = @{ (__bridge id)kSecValueData     : [value dataUsingEncoding:NSUTF8StringEncoding],
-                             (__bridge id)kSecAttrAccessible: (__bridge id)kSecAttrAccessibleAfterFirstUnlock };
+                             // ThisDeviceOnly：含包密钥的清单不随 iCloud/备份流转（V3）
+                             (__bridge id)kSecAttrAccessible: (__bridge id)kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly };
     OSStatus st = SecItemUpdate((__bridge CFDictionaryRef)KCQuery(account),
                                 (__bridge CFDictionaryRef)attrs);
     if (st == errSecItemNotFound) {

@@ -1,30 +1,37 @@
 #
-# BubbleDeck 授权 API（V1）
-# 四接口：activate / verify / packs / download，SQLite 存储，HMAC 请求校验
-# 契约见 docs/授权系统方案.md
+# BubbleDeck 授权 API（V3）
+# 两业务接口：activate / packs，外加 ping。HMAC-SHA256 请求签名校验。
+# 存储：卡密 = 按卡一文件 licenses/<卡密>.json；包 = SQLite（packs + keys 两表）
+# 限频：实例内存滑动窗口（activate 20 次/时 → 1007；packs 60 次/时 → 429）
+# 契约见 docs/授权系统方案.md §三
 #
 # 运行：uvicorn app:app --host 127.0.0.1 --port 8000
 # 环境变量：BD_SALT（签名盐，必配）  BD_DB（SQLite 路径，默认同目录 bd.db）
+#           BD_LICENSES_DIR（卡密文件目录，默认同目录 licenses/）
 #
 
 import os
+import json
 import time
 import hmac
 import hashlib
-import secrets
 import sqlite3
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-DB_PATH = os.environ.get("BD_DB", os.path.join(os.path.dirname(os.path.abspath(__file__)), "bd.db"))
-SALT = os.environ.get("BD_SALT", "bd-dev-salt")          # 生产部署必须覆盖
-TOKEN_DAYS = 7                                            # 本地凭证兜底期；正常每次启动都 verify 续期
+BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
+DB_PATH    = os.environ.get("BD_DB", os.path.join(BASE_DIR, "bd.db"))
+CARDS_DIR  = os.environ.get("BD_LICENSES_DIR", os.path.join(BASE_DIR, "licenses"))
+SALT       = os.environ.get("BD_SALT", "bd-dev-salt")     # 生产部署必须覆盖
 TS_WINDOW_MS = 300_000                                    # 签名时间窗 ±300s
+
+ACTIVATE_HOURLY = 20                                      # 同 device_id|IP 每小时
+PACKS_HOURLY    = 60
 
 app = FastAPI()
 
-# ────── DB ──────
+# ────── SQLite（packs + keys） ──────
 
 def db():
     conn = sqlite3.connect(DB_PATH)
@@ -32,38 +39,36 @@ def db():
     return conn
 
 def init_db():
+    os.makedirs(CARDS_DIR, exist_ok=True)
     with db() as c:
         c.executescript("""
-        CREATE TABLE IF NOT EXISTS licenses(
-            license     TEXT PRIMARY KEY,
-            state       TEXT NOT NULL DEFAULT 'unused',   -- unused/active/revoked
-            bind_device TEXT,
-            bind_wxid   TEXT,
-            activated_at INTEGER,
-            token       TEXT,
-            token_exp   INTEGER
-        );
         CREATE TABLE IF NOT EXISTS packs(
             name    TEXT PRIMARY KEY,
             version TEXT NOT NULL,
             size    INTEGER NOT NULL DEFAULT 0,
             md5     TEXT NOT NULL,
             url     TEXT NOT NULL,
-            packkey TEXT NOT NULL,
+            packkey TEXT NOT NULL,                        -- 兼容遗留：v1 容器 32 字符原文
             state   TEXT NOT NULL DEFAULT 'on'            -- on/off
+        );
+        CREATE TABLE IF NOT EXISTS keys(                  -- 每包每版本一把（base64 32B）
+            pack    TEXT NOT NULL,
+            version TEXT NOT NULL,
+            packkey TEXT NOT NULL,
+            ver     INTEGER NOT NULL DEFAULT 2,           -- 容器版本（2=BDP2）
+            PRIMARY KEY(pack, version)
         );
         """)
 
 # ────── 签名校验 ──────
 
 def check_sign(ts: str, sign: str, body: bytes):
-    """失败返回错误码字符串，成功返回 None"""
     if not ts or not sign:
         return 4001
     try:
         ts_ms = int(ts)
     except ValueError:
-        return 4001
+        return 1004
     if abs(int(time.time() * 1000) - ts_ms) > TS_WINDOW_MS:
         return 4002
     expect = hmac.new(SALT.encode(), f"{ts}|".encode() + body, hashlib.sha256).hexdigest()
@@ -71,32 +76,46 @@ def check_sign(ts: str, sign: str, body: bytes):
         return 4003
     return None
 
+# ────── 限频（实例内存，重启清零即可） ──────
+
+_RATE: dict = {}
+
+def rate_hit(scope: str, ident: str, limit: int) -> bool:
+    """未超限 True 并记一次；超限 False"""
+    now = time.time()
+    key = f"{scope}|{ident}"
+    arr = [t for t in _RATE.get(key, ()) if now - t < 3600]
+    ok = len(arr) < limit
+    if ok:
+        arr.append(now)
+    _RATE[key] = arr
+    return ok
+
+def client_ip(request: Request) -> str:
+    # SCF/反代场景取转发头，兜底直连地址
+    fwd = request.headers.get("X-Forwarded-For", "")
+    return (fwd.split(",")[0].strip() if fwd else "") or (request.client.host if request.client else "?")
+
+# ────── 卡密文件（按卡一 JSON） ──────
+
+def card_path(license_key: str) -> str:
+    return os.path.join(CARDS_DIR, license_key + ".json")
+
+def load_card(license_key: str):
+    try:
+        with open(card_path(license_key), encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+def save_card(card: dict):
+    with open(card_path(card["license"]), "w", encoding="utf-8") as f:
+        json.dump(card, f, ensure_ascii=False, indent=1)
+
 # ────── 工具 ──────
 
 def resp(code=0, msg="ok", data=None):
     return JSONResponse({"code": code, "msg": msg, "data": data or {}})
-
-def token_ok(c, token: str, device: str):
-    """token + 设备匹配且未过期 → 返回 license 行，否则 None"""
-    row = c.execute("SELECT * FROM licenses WHERE token=? AND bind_device=?",
-                    (token or "", device or "")).fetchone()
-    if not row or row["state"] != "active":
-        return None
-    if not row["token_exp"] or row["token_exp"] < time.time():
-        return None
-    return row
-
-def extend_token(c, license_key: str) -> int:
-    exp = int(time.time()) + TOKEN_DAYS * 86400
-    c.execute("UPDATE licenses SET token_exp=? WHERE license=?", (exp, license_key))
-    return exp
-
-def issue_token(c, license_key: str):
-    token = secrets.token_hex(24)                          # 48 字符
-    exp = int(time.time()) + TOKEN_DAYS * 86400
-    c.execute("UPDATE licenses SET token=?, token_exp=? WHERE license=?",
-              (token, exp, license_key))
-    return token, exp
 
 # ────── 接口 ──────
 
@@ -106,43 +125,28 @@ async def activate(request: Request):
     if err := check_sign(request.headers.get("X-BD-Ts"), request.headers.get("X-BD-Sign"), body):
         return resp(err, "签名校验失败")
     try:
-        j = __import__("json").loads(body)
-        license_key, device = j["license"], j["device_id"]
-        wxid, sysv, model = j["wxid"], j["sys"], j["model"]
+        j = json.loads(body)
+        license_key, device, wxid = j["license"], j["device_id"], j["wxid"]
     except Exception:
         return resp(1004, "参数缺失")
-    with db() as c:
-        row = c.execute("SELECT * FROM licenses WHERE license=?", (license_key,)).fetchone()
-        if not row:
-            return resp(1001, "卡密不存在")
-        if row["state"] == "revoked":
-            return resp(1002, "卡密已停用")
-        if row["bind_device"] and row["bind_device"] != device:
-            return resp(1003, "设备数超限")
-        if not row["bind_device"]:                          # 首次激活 = 绑定
-            c.execute("""UPDATE licenses SET state='active', bind_device=?, bind_wxid=?,
-                         activated_at=? WHERE license=?""",
-                      (device, wxid, int(time.time()), license_key))
-        c.execute("UPDATE licenses SET bind_wxid=? WHERE license=?", (wxid, license_key))
-        token, exp = issue_token(c, license_key)
-    return resp(data={"token": token, "expires_at": exp})
+    if not rate_hit("activate", f"{device}|{client_ip(request)}", ACTIVATE_HOURLY):
+        return resp(1007, "操作过于频繁，请一小时后再试")
 
-@app.post("/bd/verify")
-async def verify(request: Request):
-    body = await request.body()
-    if err := check_sign(request.headers.get("X-BD-Ts"), request.headers.get("X-BD-Sign"), body):
-        return resp(err, "签名校验失败")
-    try:
-        j = __import__("json").loads(body)
-        token, device = j["token"], j["device_id"]
-    except Exception:
-        return resp(1004, "参数缺失")
-    with db() as c:
-        row = token_ok(c, token, device)
-        if not row:
-            return resp(2001, "token 无效或已过期")
-        exp = extend_token(c, row["license"])
-    return resp(data={"active": True, "expires_at": exp})
+    card = load_card(license_key)
+    if not card:
+        return resp(1001, "卡密不存在")
+    if card.get("state") == "revoked":
+        return resp(1002, "卡密已停用")
+    bound = card.get("bind_wxid")
+    if bound and bound != wxid:
+        return resp(1005, "此码已绑定其他微信号")      # 一票否决：码跟着号走
+    if not bound:                                       # 首输码者拥有该码，永久生效
+        card["state"] = "active"
+        card["bind_wxid"] = wxid
+        card["activated_at"] = int(time.time())
+    card.setdefault("devices", {})[device] = int(time.time())   # IDFV 仅记录，不参与校验
+    save_card(card)
+    return resp(data={"pack_name": card.get("pack_name", "")})
 
 @app.post("/bd/packs")
 async def packs(request: Request):
@@ -150,35 +154,43 @@ async def packs(request: Request):
     if err := check_sign(request.headers.get("X-BD-Ts"), request.headers.get("X-BD-Sign"), body):
         return resp(err, "签名校验失败")
     try:
-        j = __import__("json").loads(body)
-        token, device = j["token"], j["device_id"]
+        j = json.loads(body)
+        device, wxid = j["device_id"], j["wxid"]
     except Exception:
         return resp(1004, "参数缺失")
-    with db() as c:
-        if not token_ok(c, token, device):
-            return resp(2001, "token 无效或已过期")
-        rows = c.execute("""SELECT name, version, size, md5, url FROM packs
-                            WHERE state='on' ORDER BY name""").fetchall()
-    return resp(data={"packs": [dict(r) for r in rows]})
+    if not rate_hit("packs", f"{device}|{client_ip(request)}", PACKS_HOURLY):
+        return resp(429, "请求过于频繁，请稍后再试")
 
-@app.post("/bd/download")
-async def download(request: Request):
-    body = await request.body()
-    if err := check_sign(request.headers.get("X-BD-Ts"), request.headers.get("X-BD-Sign"), body):
-        return resp(err, "签名校验失败")
+    # owned = 该 wxid 名下 state=active 的卡
+    owned = set()
     try:
-        j = __import__("json").loads(body)
-        token, device, name = j["token"], j["device_id"], j["name"]
-    except Exception:
-        return resp(1004, "参数缺失")
+        for fn in os.listdir(CARDS_DIR):
+            if not fn.endswith(".json"):
+                continue
+            card = load_card(fn[:-5])
+            if card and card.get("state") == "active" and card.get("bind_wxid") == wxid:
+                owned.add(card.get("pack_name"))
+    except FileNotFoundError:
+        pass
+
+    out = []
     with db() as c:
-        if not token_ok(c, token, device):
-            return resp(2001, "token 无效或已过期")
-        row = c.execute("SELECT url, md5, packkey FROM packs WHERE name=? AND state='on'",
-                        (name,)).fetchone()
-    if not row:
-        return resp(3001, "包不存在或已下架")
-    return resp(data={"url": row["url"], "md5": row["md5"], "key": row["packkey"]})
+        rows = c.execute("""SELECT name, version, size, md5, url, packkey FROM packs
+                            WHERE state='on' ORDER BY name""").fetchall()
+        for r in rows:
+            item = {"name": r["name"], "version": r["version"], "size": r["size"],
+                    "md5": r["md5"], "url": r["url"], "owned": r["name"] in owned}
+            if item["owned"]:
+                k = c.execute("SELECT packkey, ver FROM keys WHERE pack=? AND version=?",
+                              (r["name"], r["version"])).fetchone()
+                if k:                                   # BDP2 密钥（base64 32B）
+                    item["key"], item["ver"] = k["packkey"], k["ver"]
+                else:                                   # 遗留 v1 容器（CBC，32 字符原文）
+                    item["key"], item["ver"] = r["packkey"], 1
+            else:
+                item["key"], item["ver"] = None, None
+            out.append(item)
+    return resp(data={"packs": out})
 
 @app.get("/bd/ping")
 async def ping():

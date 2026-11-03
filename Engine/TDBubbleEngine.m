@@ -19,6 +19,7 @@
 #import "TDBubbleEngine.h"
 #import "TDConfig.h"
 #import "TDLog.h"
+#import "TDContainer.h"
 #import "../Core/TDLicense.h"
 #import "../libs/substrate.h"
 #import <objc/runtime.h>
@@ -78,6 +79,17 @@ static NSCache<NSString *, NSNull *>  *s_negCache = nil;   // key: 请求名（�
     return [UIImage imageWithCGImage:img.CGImage scale:scale orientation:UIImageOrientationUp];
 }
 
+// 容器条目版：同一套 @2x/@3x scale 语义（rel 用于识别后缀）
++ (nullable UIImage *)imageFromData:(NSData *)data scaleSuffix:(NSString *)rel {
+    UIImage *img = [UIImage imageWithData:data];
+    if (!img) return nil;
+    CGFloat scale = 1;
+    if ([rel hasSuffix:@"@3x.png"]) scale = 3;
+    else if ([rel hasSuffix:@"@2x.png"]) scale = 2;
+    if (scale == 1 || !img.CGImage) return img;
+    return [UIImage imageWithCGImage:img.CGImage scale:scale orientation:UIImageOrientationUp];
+}
+
 + (nullable UIImage *)bubbleImageForName:(nullable NSString *)name {
     if (name.length == 0 || [name containsString:@"/"]) return nil;  // 含路径成分一律不动
 
@@ -100,6 +112,15 @@ static NSCache<NSString *, NSNull *>  *s_negCache = nil;   // key: 请求名（�
     NSString *dir = [TDConfig activePackDir];   // 内存缓存，热路径安全
     if (!dir) return nil;
 
+    // 分流：packs/<名>/pack.bdpack 存在 = V3 盘上常密包（容器惰性解密取图）；
+    // 不存在 = 明文目录包（legacy 在线包 / 本地导入），走原 imageWithContentsOfFile 分支
+    NSFileManager *fm = [NSFileManager defaultManager];
+    TDContainer *container = nil;
+    if ([fm fileExistsAtPath:[dir stringByAppendingPathComponent:@"pack.bdpack"]]) {
+        container = [TDContainer cachedContainerForPack:active error:NULL];
+        if (!container) return nil;   // 解密失败（key 失效/文件损坏）→ 放行官方图
+    }
+
     // 剥 @3x/@2x 后缀与 .png 扩展，得到干净 stem
     NSString *stem = name;
     BOOL threeX = NO;
@@ -118,16 +139,29 @@ static NSCache<NSString *, NSNull *>  *s_negCache = nil;   // key: 请求名（�
         ? @[ @"@3x.png", @"@2x.png", @".png" ]
         : @[ @"@2x.png", @"@3x.png", @".png" ];
 
-    NSFileManager *fm = [NSFileManager defaultManager];
     NSString *assetsDir = [dir stringByAppendingPathComponent:@"Assets"];
     for (NSString *s in stems) {
         for (NSString *e in exts) {
-            NSString *p = [assetsDir stringByAppendingPathComponent:[s stringByAppendingString:e]];
-            if (![fm fileExistsAtPath:p]) continue;
-            UIImage *cached = [s_imgCache objectForKey:p];
-            if (!cached) {
-                cached = [self loadImageAtPath:p];
-                if (cached) [s_imgCache setObject:cached forKey:p cost:1];
+            UIImage *cached = nil;
+            if (container) {
+                // 容器条目：缓存 key 加包名前缀防跨包串图
+                NSString *rel = [NSString stringWithFormat:@"Assets/%@%@", s, e];
+                if (![container hasEntry:rel]) continue;
+                NSString *ck = [NSString stringWithFormat:@"%@:%@", active, rel];
+                cached = [s_imgCache objectForKey:ck];
+                if (!cached) {
+                    NSData *d = [container dataForEntry:rel];
+                    cached = d ? [self imageFromData:d scaleSuffix:rel] : nil;
+                    if (cached) [s_imgCache setObject:cached forKey:ck cost:1];
+                }
+            } else {
+                NSString *p = [assetsDir stringByAppendingPathComponent:[s stringByAppendingString:e]];
+                if (![fm fileExistsAtPath:p]) continue;
+                cached = [s_imgCache objectForKey:p];
+                if (!cached) {
+                    cached = [self loadImageAtPath:p];
+                    if (cached) [s_imgCache setObject:cached forKey:p cost:1];
+                }
             }
             if (cached && ![s isEqualToString:stem]) {
                 TDLogD(@"ALT", @"[暗色配对] %@ → %@.png", name, s);

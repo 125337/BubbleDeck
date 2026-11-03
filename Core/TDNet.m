@@ -91,6 +91,8 @@ static NSData *BDHMACSHA256(NSData *data) {
         case 1002: return @"卡密已停用，请联系卖家";
         case 1004: return @"参数缺失";
         case 1005: return @"此码已绑定其他微信号，请重新购买";
+        case 1007: return @"操作过于频繁，请一小时后再试";
+        case 429:  return @"请求过于频繁，请稍后再试";
         case 3001: return @"气泡包不存在或已下架";
         case 4001:
         case 4002:

@@ -12,6 +12,7 @@
 #import "../../Core/TDConfig.h"
 #import "../../Core/TDLicense.h"
 #import "../../Engine/TDPackLoader.h"
+#import "../../Engine/TDContainer.h"
 #import <objc/runtime.h>
 
 @implementation TDBThemePageVC
@@ -67,11 +68,26 @@
             && ![TDLicense gateOpenForPack:name]) continue;
 
         NSString *dir = [TDPackLoader packDirForName:name];
-        NSString *subtitle = [NSString stringWithFormat:@"%ld 图",
-                              dir ? (long)BDPackImageCount(dir) : 0L];
-        UIImage *thumb = dir
-            ? [UIImage imageWithContentsOfFile:[dir stringByAppendingPathComponent:@"icon.png"]]
-            : nil;
+        NSInteger imgCount = 0;
+        UIImage *thumb = nil;
+        // 分流：盘上常密包（V3）图片数/icon 走容器索引；明文目录包走原逻辑
+        if (dir && [[NSFileManager defaultManager]
+                    fileExistsAtPath:[dir stringByAppendingPathComponent:@"pack.bdpack"]]) {
+            NSError *err = nil;
+            TDContainer *c = [TDContainer cachedContainerForPack:name error:&err];
+            if (c) {
+                imgCount = [c imageCount];
+                thumb = [UIImage imageWithData:[c dataForEntry:@"icon.png"]];
+            } else {
+                TDLog(@"DEV", @"[主题页] 容器打开失败: %@ - %@", name, err.localizedDescription);
+            }
+        } else {
+            imgCount = dir ? BDPackImageCount(dir) : 0;
+            thumb = dir
+                ? [UIImage imageWithContentsOfFile:[dir stringByAppendingPathComponent:@"icon.png"]]
+                : nil;
+        }
+        NSString *subtitle = [NSString stringWithFormat:@"%ld 图", (long)imgCount];
 
         UIView *c = BDMakeCard(y, w, name, name, subtitle, thumb, [active isEqualToString:name]);
         UITapGestureRecognizer *gr = [[UITapGestureRecognizer alloc]

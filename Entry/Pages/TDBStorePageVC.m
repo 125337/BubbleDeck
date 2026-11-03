@@ -13,12 +13,14 @@
 #import "../../Core/TDConfig.h"
 #import "../../Core/TDLicense.h"
 #import "../../Engine/TDZip.h"
+#import "../../Engine/TDContainer.h"
 #import <objc/runtime.h>
 
 // ────── 下载状态（本页私有） ──────
 
 static NSString *s_downloading = nil;                 // 正在下载的包名
 static NSString *s_dlKey = nil;                       // 当前下载任务的 .bdpack 密钥（清单下发）
+static NSString *s_dlVersion = nil;                   // 当前下载任务的容器版本（GCM AAD 用）
 static float s_dlProgress = 0;
 static NSMutableDictionary<NSString *, UIButton *> *s_dlButtons;
 static BOOL s_fetchingEnts = NO;                      // 报到进行中
@@ -34,18 +36,19 @@ static void BDUpdateProgressButton(void) {
     }
 }
 
-// ────── .bdpack 下载器：进度 → md5 校验 → 解密解压落盘。同一时刻只跑一个任务。 ──────
+// ────── .bdpack 下载器：进度 → md5 校验 → 试解密 → 密文落盘（零解压）。同一时刻只跑一个任务。 ──────
 
 @interface BDDownloader : NSObject <NSURLSessionDownloadDelegate>
 + (instancetype)shared;
 - (void)fetchPack:(NSString *)name url:(NSString *)url md5:(NSString *)md5
+          version:(NSString *)version
        completion:(void (^)(BOOL ok, NSString *message))cb;   // 主线程回调
 @end
 
 @implementation BDDownloader {
     NSURLSession *_session;
     void (^_cb)(BOOL, NSString *);
-    NSString *_name, *_md5;
+    NSString *_name, *_md5, *_version;
     BOOL _done;
 }
 
@@ -65,10 +68,12 @@ static void BDUpdateProgressButton(void) {
 }
 
 - (void)fetchPack:(NSString *)name url:(NSString *)url md5:(NSString *)md5
+          version:(NSString *)version
        completion:(void (^)(BOOL, NSString *))cb {
     _cb = cb;
     _name = name;
     _md5 = md5.lowercaseString;
+    _version = version;
     _done = NO;
     [[_session downloadTaskWithURL:[NSURL URLWithString:url]] resume];
 }
@@ -89,7 +94,9 @@ didFinishDownloadingToURL:(NSURL *)location {
     NSString *err = nil;
     if (!data.length) err = @"下载内容为空";
     else if (![TDZip verifyMd5:_md5 ofData:data]) err = @"文件校验失败（md5 不符），请重试";
-    else if (![TDZip installBdpackData:data key:s_dlKey packName:_name error:&zipErr])
+    // V3 零解压安装：试解密校验（错 key/篡改在此报人话）→ 密文落盘 pack.bdpack + info.json
+    else if (![TDContainer installBdpackData:data key:s_dlKey packName:_name
+                                     version:_version error:&zipErr])
         err = zipErr.localizedDescription ?: @"安装失败";
 
     if (err) TDLog(@"LIC", @"[Download] 失败: %@ - %@", _name, err);
@@ -283,6 +290,7 @@ didCompleteWithError:(NSError *)error {
 
     s_downloading = name;
     s_dlKey = key;
+    s_dlVersion = [pack[@"version"] isKindOfClass:[NSString class]] ? pack[@"version"] : @"1.0";
     s_dlProgress = 0;
     UIButton *b = s_dlButtons[name];
     if (b) { b.enabled = NO; [b setTitle:@"0%" forState:UIControlStateNormal]; }
@@ -291,6 +299,7 @@ didCompleteWithError:(NSError *)error {
     __weak typeof(self) wv = self;
     [[BDDownloader shared] fetchPack:name url:url
                                  md5:[pack[@"md5"] isKindOfClass:[NSString class]] ? pack[@"md5"] : @""
+                             version:s_dlVersion
                           completion:^(BOOL ok, NSString *message) {
         s_downloading = nil;
         __strong typeof(wv) v = wv;
