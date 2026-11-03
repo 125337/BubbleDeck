@@ -142,14 +142,15 @@ static UIView *BDMakeCard(CGFloat y, CGFloat w,
 
 // ────── 在线包：状态与下载器 ──────
 
-static NSArray<NSDictionary *> *s_onlinePacks = nil;  // /packs 列表（nil = 未拉取）
 static NSString *s_downloading = nil;                 // 正在下载的包名
-static NSString *s_dlKey = nil;                       // 当前下载任务的 .bdpack 密钥（/download 下发）
+static NSString *s_dlKey = nil;                       // 当前下载任务的 .bdpack 密钥（清单下发）
 static float s_dlProgress = 0;
 static NSMutableDictionary<NSString *, UIButton *> *s_dlButtons;
+static BOOL s_fetchingEnts = NO;                      // 报到进行中
+static BOOL s_triedFetch = NO;                        // 本次进页是否已尝试报到（防重建循环）
 
 static void BDBuildPage(UIViewController *vc);          // 前置声明（见下）
-static void BDFetchOnlinePacks(UIViewController *vc);
+static void BDFetchEntitlements(UIViewController *vc);
 
 static NSString *BDFileSize(long long bytes) {
     if (bytes >= 1024 * 1024) return [NSString stringWithFormat:@"%.1f MB", bytes / 1024.0 / 1024.0];
@@ -295,52 +296,6 @@ static void BDBuildPage(UIViewController *vc) {
     CGFloat y = 74;
     CGFloat wIn = w - 30;
 
-    // ── 激活状态卡 ──
-    if ([TDLicense isActiveNow]) {
-        UIView *card = [[UIView alloc] initWithFrame:CGRectMake(15, y, wIn, 64)];
-        card.backgroundColor = BDCardBg();
-        card.layer.cornerRadius = 15;
-        if (@available(iOS 13.0, *)) card.layer.cornerCurve = kCACornerCurveContinuous;
-        UILabel *t = [[UILabel alloc] initWithFrame:CGRectMake(16, 12, wIn - 32, 22)];
-        t.font = [UIFont systemFontOfSize:16 weight:UIFontWeightSemibold];
-        t.text = @"✓ 已激活";
-        [card addSubview:t];
-        UILabel *s2 = [[UILabel alloc] initWithFrame:CGRectMake(16, 36, wIn - 32, 16)];
-        s2.font = [UIFont systemFontOfSize:12];
-        s2.textColor = BDSecondaryText();
-        s2.text = [NSString stringWithFormat:@"永久授权 · 设备尾号 %@", [TDLicense deviceTail]];
-        [card addSubview:s2];
-        [scroll addSubview:card];
-        y += 64 + 12;
-    } else {
-        UIView *card = [[UIView alloc] initWithFrame:CGRectMake(15, y, wIn, 76)];
-        card.backgroundColor = BDCardBg();
-        card.layer.cornerRadius = 15;
-        if (@available(iOS 13.0, *)) card.layer.cornerCurve = kCACornerCurveContinuous;
-        UILabel *t = [[UILabel alloc] initWithFrame:CGRectMake(16, 15, wIn - 130, 22)];
-        t.font = [UIFont systemFontOfSize:16 weight:UIFontWeightSemibold];
-        t.text = @"插件未激活";
-        [card addSubview:t];
-        UILabel *s2 = [[UILabel alloc] initWithFrame:CGRectMake(16, 41, wIn - 130, 18)];
-        s2.font = [UIFont systemFontOfSize:12];
-        s2.textColor = BDSecondaryText();
-        s2.text = @"输入卡密解锁在线气泡包";
-        [card addSubview:s2];
-        UIButton *act = [UIButton buttonWithType:UIButtonTypeSystem];
-        act.frame = CGRectMake(wIn - 96, 21, 80, 34);
-        act.layer.cornerRadius = 10;
-        if (@available(iOS 13.0, *)) act.backgroundColor = [UIColor systemBlueColor];
-        else act.backgroundColor = [UIColor colorWithRed:0.0 green:0.48 blue:1.0 alpha:1.0];
-        act.tintColor = [UIColor whiteColor];
-        act.titleLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
-        [act setTitle:@"激活" forState:UIControlStateNormal];
-        [act addTarget:vc action:NSSelectorFromString(@"bdActivateTap:")
-       forControlEvents:UIControlEventTouchUpInside];
-        [card addSubview:act];
-        [scroll addSubview:card];
-        y += 76 + 12;
-    }
-
     // 首卡：微信默认
     {
         UIView *card = BDMakeCard(y, w, nil, @"微信默认",
@@ -386,8 +341,8 @@ static void BDBuildPage(UIViewController *vc) {
         }
     }
 
-    // ── 在线包区（仅已激活显示；未激活什么都不渲染） ──
-    if ([TDLicense isActiveNow]) {
+    // ── 在线包区（V2 橱窗：未拥有可看+输码激活；owned 可下载；已装未授权=已失效） ──
+    {
         UILabel *sec = [[UILabel alloc] initWithFrame:CGRectMake(15, y + 2, wIn, 18)];
         sec.font = [UIFont systemFontOfSize:13];
         sec.textColor = BDSecondaryText();
@@ -395,17 +350,20 @@ static void BDBuildPage(UIViewController *vc) {
         [scroll addSubview:sec];
         y += 26;
 
-        if (!s_onlinePacks) {
-            // 列表未拉取：静默拉取，回来重建页面
-            BDFetchOnlinePacks(vc);
+        NSArray<NSDictionary *> *ents = [TDLicense entitlements];
+        if (!ents && !s_triedFetch) {
+            s_triedFetch = YES;
+            BDFetchEntitlements(vc);
+        }
+        if (!ents) {
             UILabel *hint = [[UILabel alloc] initWithFrame:CGRectMake(15, y, wIn, 40)];
             hint.font = [UIFont systemFontOfSize:13];
             hint.textColor = BDSecondaryText();
             hint.textAlignment = NSTextAlignmentCenter;
-            hint.text = @"正在获取在线包列表…";
+            hint.text = s_fetchingEnts ? @"正在获取在线包列表…" : @"连接服务器失败，稍后再进本页重试";
             [scroll addSubview:hint];
             y += 40 + 12;
-        } else if (s_onlinePacks.count == 0) {
+        } else if (ents.count == 0) {
             UILabel *hint = [[UILabel alloc] initWithFrame:CGRectMake(15, y, wIn, 40)];
             hint.font = [UIFont systemFontOfSize:13];
             hint.textColor = BDSecondaryText();
@@ -416,12 +374,14 @@ static void BDBuildPage(UIViewController *vc) {
         } else {
             NSSet<NSString *> *installed = [NSSet setWithArray:packs];
             BOOL highlighted = NO;
-            for (NSDictionary *p in s_onlinePacks) {
+            for (NSDictionary *p in ents) {
                 NSString *name = [p[@"name"] isKindOfClass:[NSString class]] ? p[@"name"] : @"";
                 if (!name.length) continue;
+                BOOL owned = [p[@"owned"] boolValue];
                 BOOL has = [installed containsObject:name];
                 BOOL busy = [s_downloading isEqualToString:name];
-                BOOL firstTodo = !has && !busy && !highlighted && !s_downloading;
+                // 引导高亮：第一个 owned 且未安装的包（下一步动作）
+                BOOL firstTodo = owned && !has && !busy && !highlighted && !s_downloading;
 
                 UIView *card = [[UIView alloc] initWithFrame:CGRectMake(15, y, wIn, 64)];
                 card.backgroundColor = BDCardBg();
@@ -429,17 +389,17 @@ static void BDBuildPage(UIViewController *vc) {
                 if (@available(iOS 13.0, *)) {
                     card.layer.cornerCurve = kCACornerCurveContinuous;
                     if (firstTodo) {
-                        card.layer.borderWidth = 1.5;   // 引导下载：高亮第一个未安装包
+                        card.layer.borderWidth = 1.5;   // 引导：高亮第一个 owned 未安装包
                         card.layer.borderColor = [UIColor systemBlueColor].CGColor;
                     }
                 }
 
-                UILabel *nm = [[UILabel alloc] initWithFrame:CGRectMake(16, 11, wIn - 150, 20)];
+                UILabel *nm = [[UILabel alloc] initWithFrame:CGRectMake(16, 11, wIn - 160, 20)];
                 nm.font = [UIFont systemFontOfSize:15 weight:UIFontWeightSemibold];
                 nm.text = name;
                 [card addSubview:nm];
 
-                UILabel *sb = [[UILabel alloc] initWithFrame:CGRectMake(16, 34, wIn - 150, 16)];
+                UILabel *sb = [[UILabel alloc] initWithFrame:CGRectMake(16, 34, wIn - 160, 16)];
                 sb.font = [UIFont systemFontOfSize:12];
                 sb.textColor = BDSecondaryText();
                 sb.text = [NSString stringWithFormat:@"v%@ · %@",
@@ -447,21 +407,30 @@ static void BDBuildPage(UIViewController *vc) {
                 [card addSubview:sb];
 
                 UIButton *dl = [UIButton buttonWithType:UIButtonTypeSystem];
-                dl.frame = CGRectMake(wIn - 92, 16, 76, 32);
+                dl.frame = CGRectMake(wIn - 102, 16, 86, 32);
                 dl.layer.cornerRadius = 10;
                 dl.titleLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
                 if (has) {
-                    [dl setTitle:@"已安装" forState:UIControlStateNormal];
-                    dl.enabled = NO;
-                    if (@available(iOS 13.0, *)) dl.backgroundColor = [UIColor tertiarySystemFillColor];
-                    else dl.backgroundColor = [UIColor colorWithWhite:0.9 alpha:1.0];
+                    if (owned) {
+                        [dl setTitle:@"已安装" forState:UIControlStateNormal];
+                        dl.enabled = NO;
+                        if (@available(iOS 13.0, *)) dl.backgroundColor = [UIColor tertiarySystemFillColor];
+                        else dl.backgroundColor = [UIColor colorWithWhite:0.9 alpha:1.0];
+                    } else {
+                        // 在线装过但授权没了（封卡/换号）：闸门已停用，提示状态
+                        [dl setTitle:@"已失效" forState:UIControlStateNormal];
+                        [dl setTitleColor:[UIColor systemRedColor] forState:UIControlStateNormal];
+                        dl.enabled = NO;
+                        if (@available(iOS 13.0, *)) dl.backgroundColor = [UIColor tertiarySystemFillColor];
+                        else dl.backgroundColor = [UIColor colorWithWhite:0.9 alpha:1.0];
+                    }
                 } else if (busy) {
                     [dl setTitle:[NSString stringWithFormat:@"%.0f%%", s_dlProgress * 100]
                         forState:UIControlStateNormal];
                     dl.enabled = NO;
                     if (@available(iOS 13.0, *)) dl.backgroundColor = [UIColor tertiarySystemFillColor];
                     else dl.backgroundColor = [UIColor colorWithWhite:0.9 alpha:1.0];
-                } else {
+                } else if (owned) {
                     [dl setTitle:@"下载" forState:UIControlStateNormal];
                     if (@available(iOS 13.0, *)) dl.backgroundColor = [UIColor systemBlueColor];
                     else dl.backgroundColor = [UIColor colorWithRed:0.0 green:0.48 blue:1.0 alpha:1.0];
@@ -470,11 +439,20 @@ static void BDBuildPage(UIViewController *vc) {
                     [dl addTarget:vc action:NSSelectorFromString(@"bdDownloadTap:")
                    forControlEvents:UIControlEventTouchUpInside];
                     s_dlButtons[name] = dl;
+                } else {
+                    // 未拥有：橱窗展示，行内输码激活
+                    [dl setTitle:@"输码激活" forState:UIControlStateNormal];
+                    if (@available(iOS 13.0, *)) dl.backgroundColor = [UIColor systemBlueColor];
+                    else dl.backgroundColor = [UIColor colorWithRed:0.0 green:0.48 blue:1.0 alpha:1.0];
+                    dl.tintColor = [UIColor whiteColor];
+                    objc_setAssociatedObject(dl, "pack", name, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                    [dl addTarget:vc action:NSSelectorFromString(@"bdActivateTap:")
+                   forControlEvents:UIControlEventTouchUpInside];
                 }
                 [card addSubview:dl];
                 [scroll addSubview:card];
                 y += 64 + 12;
-                if (!has && !busy) highlighted = YES;
+                if (firstTodo) highlighted = YES;
             }
         }
     }
@@ -557,6 +535,18 @@ static void bdCardTap(id self, SEL _cmd, UITapGestureRecognizer *gr) {
 
     if ([pack isEqualToString:active]) return; // 已在使用，无操作
 
+    // 在线包闸门联动：授权没了（封卡/换号/离线超 7 天）不给启用
+    if ([[TDConfig sourceForPack:pack] isEqualToString:@"online"]
+        && ![TDLicense gateOpenForPack:pack]) {
+        UIAlertController *a = [UIAlertController alertControllerWithTitle:@"授权不可用"
+            message:[NSString stringWithFormat:@"「%@」当前无有效授权：激活码可能已绑定其他微信号或被封禁，"
+                     @"也可能是离线超过 7 天。可重新购买激活码，或联网后重试。", pack]
+            preferredStyle:UIAlertControllerStyleAlert];
+        [a addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleCancel handler:nil]];
+        [vc presentViewController:a animated:YES completion:nil];
+        return;
+    }
+
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"启用气泡包"
         message:[NSString stringWithFormat:@"启用「%@」？\n新打开的聊天页生效。", pack]
         preferredStyle:UIAlertControllerStyleAlert];
@@ -572,7 +562,7 @@ static void bdCardTap(id self, SEL _cmd, UITapGestureRecognizer *gr) {
 static void bdReloadTap(id self, SEL _cmd, UIButton *btn) {
     UIViewController *vc = (UIViewController *)self;
     [TDBubbleEngine purgeCaches];       // 顺带清负缓存，包内容变更即时生效
-    if ([TDLicense isActiveNow]) s_onlinePacks = nil;   // 在线列表也重拉（后台新登记的包能刷出来）
+    s_triedFetch = NO;                  // 在线清单允许重试（后台新登记的包/新买的码能刷出来）
     BDBuildPage(vc);
     TDLog(@"DEV", @"[Pack] 重新加载，packs=%@", [TDConfig availablePacks]);
 }
@@ -582,91 +572,81 @@ static void bdLogSwitch(id self, SEL _cmd, UISwitch *sw) {
     TDLog(@"DEV", @"[Log] 文件日志 %@", sw.on ? @"开" : @"关");
 }
 
-// ────── 在线包与激活（交互处理） ──────
+// ────── 在线包与激活（交互处理，V2：activate + packs 两接口） ──────
 
-static BOOL s_fetchingPacks = NO;
-
-// 拉在线包列表；成功重建页面，失败静默（保持 nil，下次进页重试）
-static void BDFetchOnlinePacks(UIViewController *vc) {
-    if (s_fetchingPacks) return;
-    s_fetchingPacks = YES;
-    NSString *token = [TDLicense currentToken];
-    if (!token.length) { s_fetchingPacks = NO; return; }
+// 启动报到：拉 owned 清单缓存；成功/失败都回调重建页面（失败保持提示，下次进页重试）
+static void BDFetchEntitlements(UIViewController *vc) {
+    if (s_fetchingEnts) return;
+    s_fetchingEnts = YES;
     __weak UIViewController *wv = vc;
-    [TDNet postPath:@"packs"
-               body:@{ @"token"    : token,
-                       @"device_id": [TDLicense deviceID] }
-         completion:^(NSInteger code, NSString *msg, NSDictionary *data) {
-        s_fetchingPacks = NO;
-        if (code == 0) {
-            id arr = data[@"packs"];
-            s_onlinePacks = [arr isKindOfClass:[NSArray class]] ? arr : @[];
-            TDLog(@"LIC", @"[Download] 在线包 %lu 个", (unsigned long)s_onlinePacks.count);
-        } else if (code == 2001) {
-            s_onlinePacks = @[];   // token 失效：不等列表了（startupCheck 会自愈重激活）
-        } else {
-            return;                // 网络失败：不重建，保留「正在获取」占位到下次进页
-        }
+    [TDLicense refreshEntitlementsWithCompletion:^(BOOL ok) {
+        s_fetchingEnts = NO;
+        if (ok) TDLog(@"LIC", @"[Ents] 清单已刷新");
         UIViewController *v = wv;
         if (v && v.isViewLoaded && v.view.window) BDBuildPage(v);
     }];
 }
 
-// 下载：/download 取 url+md5+key → 下载 → 校验 → 解密解压落盘
+// 下载：url/md5/key 直接取自缓存清单（owned 包），无需单独 download 接口
 static void BDStartDownload(UIViewController *vc, NSString *name) {
     if (s_downloading || !name.length) return;
-    NSString *token = [TDLicense currentToken];
-    if (!token.length) return;
+    NSDictionary *pack = nil;
+    for (NSDictionary *p in [TDLicense entitlements]) {
+        if ([p isKindOfClass:[NSDictionary class]] && [name isEqualToString:p[@"name"]]) {
+            pack = p;
+            break;
+        }
+    }
+    // 无授权不下发（闸门同源判断）
+    if (![pack[@"owned"] boolValue]) return;
+    NSString *url = [pack[@"url"] isKindOfClass:[NSString class]] ? pack[@"url"] : @"";
+    NSString *key = [pack[@"key"] isKindOfClass:[NSString class]] ? pack[@"key"] : @"";
+    if (!url.length || !key.length) return;
+
     s_downloading = name;
+    s_dlKey = key;
     s_dlProgress = 0;
     UIButton *b = s_dlButtons[name];
     if (b) { b.enabled = NO; [b setTitle:@"0%" forState:UIControlStateNormal]; }
     TDLog(@"LIC", @"[Download] 开始: %@", name);
 
     __weak UIViewController *wv = vc;
-    [TDNet postPath:@"download"
-               body:@{ @"token"    : token,
-                       @"device_id": [TDLicense deviceID],
-                       @"name"     : name }
-         completion:^(NSInteger code, NSString *msg, NSDictionary *data) {
+    [[BDDownloader shared] fetchPack:name url:url
+                                 md5:[pack[@"md5"] isKindOfClass:[NSString class]] ? pack[@"md5"] : @""
+                          completion:^(BOOL ok, NSString *message) {
+        s_downloading = nil;
         UIViewController *v = wv;
-        if (code != 0) {
-            s_downloading = nil;
-            if (v) {
-                UIAlertController *a = [UIAlertController alertControllerWithTitle:@"下载失败"
-                    message:[TDNet humanMessageForCode:code serverMsg:msg]
-                    preferredStyle:UIAlertControllerStyleAlert];
-                [a addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleCancel handler:nil]];
-                [v presentViewController:a animated:YES completion:nil];
-            }
-            return;
+        if (v && v.isViewLoaded) {
+            UIAlertController *a = [UIAlertController alertControllerWithTitle:
+                ok ? @"下载完成" : @"下载失败"
+                message:ok ? [NSString stringWithFormat:@"「%@」已安装，点击下方卡片即可启用。", name]
+                           : message
+                preferredStyle:UIAlertControllerStyleAlert];
+            [a addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleCancel handler:nil]];
+            [v presentViewController:a animated:YES completion:nil];
+            BDBuildPage(v);   // 新包进本地列表，气泡即刻可用
         }
-        s_dlKey = [data[@"key"] isKindOfClass:[NSString class]] ? data[@"key"] : @"";
-        [[BDDownloader shared] fetchPack:name
-                                     url:[data[@"url"] isKindOfClass:[NSString class]] ? data[@"url"] : @""
-                                     md5:[data[@"md5"] isKindOfClass:[NSString class]] ? data[@"md5"] : @""
-                              completion:^(BOOL ok, NSString *message) {
-            s_downloading = nil;
-            UIViewController *v2 = wv;
-            if (v2 && v2.isViewLoaded) {
-                UIAlertController *a = [UIAlertController alertControllerWithTitle:
-                    ok ? @"下载完成" : @"下载失败"
-                    message:ok ? [NSString stringWithFormat:@"「%@」已安装，点击下方卡片即可启用。", name]
-                               : message
-                    preferredStyle:UIAlertControllerStyleAlert];
-                [a addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleCancel handler:nil]];
-                [v2 presentViewController:a animated:YES completion:nil];
-                BDBuildPage(v2);   // 新包进本地列表，气泡即刻可用
-            }
-        }];
     }];
 }
 
-// 激活入口：弹窗输入卡密 → /activate → 成功后自动拉在线包列表（高亮引导下载）
+// 行内激活：弹窗输码 → /activate（wxid+IDFV 自动带）→ 成功自动刷新清单高亮
 static void bdActivateTap(id self, SEL _cmd, UIButton *btn) {
     UIViewController *vc = (UIViewController *)self;
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"输入卡密"
-        message:@"卡密格式 XXXX-XXXX-XXXX-XXXX，1 卡 = 1 设备，激活后绑定本机"
+    NSString *pack = objc_getAssociatedObject(btn, "pack");
+
+    // 绑定主键就是 wxid：抓不到（未登录/早期）直接本地拦，不给发请求
+    if (![TDLicense currentWxid]) {
+        UIAlertController *a = [UIAlertController alertControllerWithTitle:@"无法激活"
+            message:@"请先登录微信后再激活（激活码会绑定当前微信号）"
+            preferredStyle:UIAlertControllerStyleAlert];
+        [a addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleCancel handler:nil]];
+        [vc presentViewController:a animated:YES completion:nil];
+        return;
+    }
+
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:
+        [NSString stringWithFormat:@"激活「%@」", pack]
+        message:@"输入该气泡包的激活码。激活后绑定当前微信号，永久有效，不可换绑。"
         preferredStyle:UIAlertControllerStyleAlert];
     [alert addTextFieldWithConfigurationHandler:^(UITextField *tf) {
         tf.placeholder = @"XXXX-XXXX-XXXX-XXXX";
@@ -676,22 +656,22 @@ static void bdActivateTap(id self, SEL _cmd, UIButton *btn) {
     __weak UIViewController *wv = vc;
     [alert addAction:[UIAlertAction actionWithTitle:@"激活" style:UIAlertActionStyleDefault
         handler:^(__unused UIAlertAction *a) {
-        NSString *card = [alert.textFields.firstObject.text stringByTrimmingCharactersInSet:
+        NSString *code = [alert.textFields.firstObject.text stringByTrimmingCharactersInSet:
                           [NSCharacterSet whitespaceAndNewlineCharacterSet]];
-        if (!card.length) return;
-        TDLog(@"LIC", @"[Activate] 用户提交卡密（尾 4 位: %@）", card.length >= 4 ? [card substringFromIndex:card.length - 4] : card);
-        [TDLicense activateCard:card completion:^(BOOL ok, NSString *message) {
+        if (!code.length) return;
+        TDLog(@"LIC", @"[Activate] 提交激活码（尾 4 位: %@）包: %@",
+              code.length >= 4 ? [code substringFromIndex:code.length - 4] : code, pack);
+        [TDLicense activateLicense:code completion:^(BOOL ok, NSString *message) {
             UIViewController *v = wv;
             UIAlertController *done = [UIAlertController alertControllerWithTitle:
                 ok ? @"激活成功" : @"激活失败"
-                message:ok ? @"已绑定本机，在线气泡包列表已解锁。" : message
+                message:message
                 preferredStyle:UIAlertControllerStyleAlert];
             [done addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleCancel
                 handler:^(__unused UIAlertAction *x) {
                 if (!ok) return;
-                s_onlinePacks = nil;   // 重新拉列表 → 重建页面 → 第一个未安装包高亮
                 UIViewController *v2 = wv;
-                if (v2 && v2.isViewLoaded) BDBuildPage(v2);
+                if (v2 && v2.isViewLoaded) BDBuildPage(v2);   // activate 内部已同步报到，重建即见[下载]
             }]];
             [v presentViewController:done animated:YES completion:nil];
         }];
@@ -749,8 +729,8 @@ static void bdEntryViewWillDisappear(id self, SEL _cmd, BOOL animated) {
     dispatch_once(&onceToken, ^{
         TDLog(@"DEV", @"TDBubbleEntry install: 气泡 hook + 插件页入口");
 
-        // 授权启动自愈（后台异步：verify 报到 → 过期自动重激活 → 闸门状态就位）
-        [TDLicense startupCheck];
+        // 授权启动报到（后台异步：POST /packs → 缓存 owned 清单 → 闸门状态就位）
+        [TDLicense refreshEntitlements];
 
         // 启动时包列表锚点（排查 Documents 被外部清理的时间点用）
         TDLog(@"DEV", @"[Pack] install 时已安装: %@", [TDConfig availablePacks]);

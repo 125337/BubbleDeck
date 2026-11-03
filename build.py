@@ -24,10 +24,11 @@ VERIFY_U8  = ['BubbleDeck', 'TDBubbleEntry', 'TDBubbleEngine', 'TDPackLoader',
               'TDConfig', 'MMThemeManager', 'ChatRoom_Bubble_', 'bubbleImageForName',
               'imageNamed:warnIfNotFound:', 'BubbleDeckEntryVC', 'WCPluginsMgr',
               '_Dark', 'TDNet', 'TDLicense', 'TDZip', 'qb.xhhan.xyz',
-              'X-BD-Sign', 'BDPK', 'installBdpackData', 'startupCheck']
+              'X-BD-Sign', 'BDPK', 'installBdpackData', 'refreshEntitlements',
+              'gateOpenForPack', 'setPackSource']
 VERIFY_U16 = ['气泡包', '微信默认', '使用中', '日志记录', '重新加载', '本地气泡引擎',
-              '插件未激活', '输入卡密', '在线气泡包', '已激活', '下载', '激活成功',
-              '永久授权']
+              '在线气泡包', '激活成功', '激活失败', '下载', '输码激活', '已失效',
+              '正在获取在线包列表', '已激活', '请先登录微信后再激活']
 
 _CREDS = None
 

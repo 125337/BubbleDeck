@@ -30,4 +30,10 @@ extern NSString * const kTDVersion;
 /// 已安装的气泡包名列表（packsRoot 下含 info.json 的目录名，按名称排序）
 + (NSArray<NSString *> *)availablePacks;
 
+/// 包来源：@"online"（在线下载安装，闸门校验授权）或 @"imported"（本地导入，默认，免费放行）
++ (NSString *)sourceForPack:(NSString *)name;
+
+/// 标记包来源（在线安装成功后调用；source 传 @"online" 生效，其他值清除标记）
++ (void)setPackSource:(NSString *)name source:(NSString *)source;
+
 @end

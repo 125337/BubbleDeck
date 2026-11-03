@@ -8,6 +8,7 @@
 
 #import "TDZip.h"
 #import "TDPackLoader.h"
+#import "../Core/TDConfig.h"
 #import "../Core/TDLog.h"
 #import <CommonCrypto/CommonCrypto.h>
 #import <string.h>
@@ -249,6 +250,8 @@ static BOOL TDLocatePackRoot(NSString *dir) {
         return BDFail(error, @"安装落盘失败");
     }
     TDLog(@"LIC", @"[TDZip] 安装完成: packs/%@", packName);
+    // V2：标记来源为在线安装——闸门据此对该包启用 owned 校验（本地导入包默认 imported 不受限）
+    [TDConfig setPackSource:packName source:@"online"];
     return YES;
 }
 

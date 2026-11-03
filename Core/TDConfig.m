@@ -7,10 +7,11 @@
 //
 
 #import "TDConfig.h"
+#import "TDLog.h"
 #import "../Engine/TDPackLoader.h"
 #import "../Engine/TDBubbleEngine.h"
 
-NSString * const kTDVersion = @"0.2.0";
+NSString * const kTDVersion = @"0.3.0";
 
 static NSString *TDPrefsPath(void) {
     NSString *prefs = [NSSearchPathForDirectoriesInDomains(NSLibraryDirectory, NSUserDomainMask, YES)
@@ -26,6 +27,19 @@ static BOOL     s_packLoaded = NO;    // 区分"未加载"与"无气泡包"
 static NSString *s_pack = nil;
 static BOOL     s_dirResolved = NO;   // 区分"未解析"与"解析过但没有"
 static NSString *s_packDir = nil;
+
+// 包来源（prefs: sources = {包名: @"online"}）。热路径读（闸门），走内存缓存。
+static NSDictionary *s_sources = nil;
+static BOOL s_sourcesLoaded = NO;
+
+static NSDictionary *BDSources(void) {
+    if (!s_sourcesLoaded) {
+        id v = [NSMutableDictionary dictionaryWithContentsOfFile:TDPrefsPath()][@"sources"];
+        s_sources = [v isKindOfClass:[NSDictionary class]] ? v : @{};
+        s_sourcesLoaded = YES;
+    }
+    return s_sources;
+}
 
 @implementation TDConfig
 
@@ -71,6 +85,28 @@ static NSString *s_packDir = nil;
         s_dirResolved = YES;
     }
     return s_packDir;
+}
+
++ (NSString *)sourceForPack:(NSString *)name {
+    if (!name.length) return @"imported";
+    NSString *s = BDSources()[name];
+    return [s isKindOfClass:[NSString class]] && [s isEqualToString:@"online"] ? @"online" : @"imported";
+}
+
++ (void)setPackSource:(NSString *)name source:(NSString *)source {
+    if (!name.length) return;
+    NSMutableDictionary *d = [NSMutableDictionary dictionaryWithContentsOfFile:TDPrefsPath()]
+                              ?: [NSMutableDictionary dictionary];
+    NSMutableDictionary *src = [[d[@"sources"] isKindOfClass:[NSDictionary class]]
+                                ? d[@"sources"] : @{} mutableCopy] ?: [NSMutableDictionary dictionary];
+    if ([source isEqualToString:@"online"]) src[name] = @"online";
+    else [src removeObjectForKey:name];
+    d[@"sources"] = src;
+    [d writeToFile:TDPrefsPath() atomically:YES];
+
+    s_sources = src;
+    s_sourcesLoaded = YES;
+    TDLog(@"DEV", @"[Source] %@ → %@", name, src[name] ?: @"imported");
 }
 
 @end

@@ -2,8 +2,10 @@
 //  TDLicense.m
 //  BubbleDeck
 //
-//  Keychain 三项：token（7 天滚动）/ card（卡密，自动重激活用）/ lastVerify（兜底起点）。
-//  状态机见头文件。所有网络在后台线程，内存状态写入后发通知，UI 收到重建。
+//  V2 授权模型（相比 V1 净减 ~100 行：无 token 状态机/自愈/兜底计时）。
+//  Keychain 四项：cachedWxid / entitlements（清单 JSON）/ lastSync（报到时间戳）/
+//  device（IDFV 异常兜底 UUID）。V1 遗留字段（token/card/lastVerify）启动清理一次。
+//  清单读取全部走内存缓存——闸门在微信取图热路径上，禁止每次 Keychain IO。
 //
 
 #import "TDLicense.h"
@@ -17,11 +19,16 @@ NSNotificationName const TDLicenseStateChangedNotification = @"BubbleDeckLicense
 
 // ────── Keychain ──────
 
-static NSString * const kKCService    = @"com.bubbledeck.auth";
-static NSString * const kKCAccountToken      = @"token";
-static NSString * const kKCAccountCard       = @"card";
-static NSString * const kKCAccountLastVerify = @"lastVerify";
-static NSString * const kKCAccountDevice     = @"device";
+static NSString * const kKCService = @"com.bubbledeck.auth";
+static NSString * const kKCAccountWxid   = @"cachedWxid";
+static NSString * const kKCAccountEnts   = @"entitlements";
+static NSString * const kKCAccountSync   = @"lastSync";
+static NSString * const kKCAccountDevice = @"device";
+// V1 遗留字段（启动清理一次）
+static NSArray<NSString *> *kKCLegacyAccounts(void) {
+    static NSArray *a = @[@"token", @"card", @"lastVerify"];
+    return a;
+}
 
 static NSDictionary *KCQuery(NSString *account) {
     return @{ (__bridge id)kSecClass       : (__bridge id)kSecClassGenericPassword,
@@ -60,44 +67,48 @@ static void KCDelete(NSString *account) {
     SecItemDelete((__bridge CFDictionaryRef)KCQuery(account));
 }
 
-// ────── 内存状态 ──────
-// s_active 是收费闸门的唯一判断源：Keychain 恢复 → verify/重激活结果 → 单向更新。
-
-static TDLicenseState s_state = TDLicenseStateNotActivated;
-static BOOL s_active = NO;
-static BOOL s_restored = NO;
-
-static void BDSetState(TDLicenseState st) {
-    if (s_state == st && s_active == (st == TDLicenseStateActive)) return;
-    s_state = st;
-    s_active = (st == TDLicenseStateActive);
-    TDLog(@"LIC", @"授权状态 → %ld", (long)st);
-    dispatch_async(dispatch_get_main_queue(), ^{
-        [[NSNotificationCenter defaultCenter] postNotificationName:TDLicenseStateChangedNotification
-                                                            object:@(st)];
-    });
+static BOOL s_legacyCleaned = NO;
+static void BDCleanLegacy(void) {
+    if (s_legacyCleaned) return;
+    s_legacyCleaned = YES;
+    for (NSString *a in kKCLegacyAccounts()) KCDelete(a);
 }
 
-// 上次报到距今 < 7 天 → 兜底期内仍算激活
-static const NSTimeInterval kGraceSeconds = 7 * 86400;
+// ────── 内存缓存（热路径安全） ──────
 
-static void BDRestoreFromKeychain(void) {
-    if (s_restored) return;
-    s_restored = YES;
-    NSString *token = KCGet(kKCAccountToken);
-    if (!token.length) {
-        s_state = TDLicenseStateNotActivated;
-        s_active = NO;
-        return;
-    }
-    double last = [KCGet(kKCAccountLastVerify) doubleValue];
-    BOOL withinGrace = (last > 0 && [[NSDate date] timeIntervalSince1970] - last < kGraceSeconds);
-    s_state = withinGrace ? TDLicenseStateActive : TDLicenseStateGraceExpired;
-    s_active = withinGrace;
-    TDLog(@"LIC", @"启动恢复：token 存在，上次报到 %@（%@）",
-          last > 0 ? [NSString stringWithFormat:@"%.0f 秒前", [[NSDate date] timeIntervalSince1970] - last] : @"无记录",
-          withinGrace ? @"兜底期内" : @"兜底超期");
+static NSArray<NSDictionary *> *s_ents = nil;   // 解析后的 packs 清单
+static BOOL s_entsLoaded = NO;
+static double s_lastSync = -1;                  // -1 = 未从 Keychain 加载
+static BOOL s_syncing = NO;
+
+static double BDLastSync(void) {
+    if (s_lastSync < 0) s_lastSync = [KCGet(kKCAccountSync) doubleValue];
+    return s_lastSync;
 }
+
+static void BDLoadEnts(void) {
+    if (s_entsLoaded) return;
+    s_entsLoaded = YES;
+    BDCleanLegacy();
+    NSString *json = KCGet(kKCAccountEnts);
+    if (!json.length) return;
+    NSData *d = [json dataUsingEncoding:NSUTF8StringEncoding];
+    id obj = d ? [NSJSONSerialization JSONObjectWithData:d options:0 error:nil] : nil;
+    if ([obj isKindOfClass:[NSArray class]]) s_ents = obj;
+}
+
+static void BDSaveEnts(NSArray *packs) {
+    s_ents = packs;
+    s_entsLoaded = YES;
+    NSData *d = [NSJSONSerialization dataWithJSONObject:packs options:0 error:nil];
+    KCSet(kKCAccountEnts,
+          d ? [[NSString alloc] initWithData:d encoding:NSUTF8StringEncoding] : nil);
+    s_lastSync = [[NSDate date] timeIntervalSince1970];
+    KCSet(kKCAccountSync, [NSString stringWithFormat:@"%.0f", s_lastSync]);
+}
+
+// 离线兜底：上次报到距今 7 天内有效
+static const NSTimeInterval kCacheSeconds = 7 * 86400;
 
 // ────── 设备信息 ──────
 
@@ -131,7 +142,7 @@ static id BDGetService(Class serviceClass) {
 }
 
 // wxid：CContactMgr getSelfContact → m_nsUsrName（Mio ServiceHelper 同款，selector 直调非 KVC）。
-// 仅作服务器记录展示，不作校验键——尽力抓，抓不到发空串。
+// 绑定主键就是 wxid，抓不到时激活本地拦截；报到时用上次缓存兜底。
 static NSString *BDWxid(void) {
     @try {
         id contactMgr = BDGetService(objc_getClass("CContactMgr"));
@@ -144,54 +155,137 @@ static NSString *BDWxid(void) {
             }
         }
     } @catch (NSException *e) {
-        TDLogD(@"LIC", @"wxid 抓取失败（仅记录用，不影响激活）: %@", e.reason);
+        TDLogD(@"LIC", @"wxid 抓取失败: %@", e.reason);
     }
     return nil;
 }
 
-// ────── 激活（同步，后台线程调用） ──────
-// 成功：存 token/卡密/lastVerify，置 Active，返回 nil；失败返回人话错误。
+// ────── 同步报到（后台线程调用） ──────
 
-static NSString *BDActivateSync(NSString *card) {
-    NSDictionary *body = @{ @"license"   : card,
-                            @"device_id" : [TDLicense deviceID],
-                            @"wxid"      : (BDWxid() ?: @""),
-                            @"sys"       : [NSString stringWithFormat:@"iOS %@",
-                                            [UIDevice currentDevice].systemVersion],
-                            @"model"     : BDModel() };
-    NSDictionary *resp = [TDNet syncPostPath:@"activate" body:body];
-    if (!resp) return [TDNet humanMessageForCode:-1 serverMsg:nil];
-    NSInteger code = [resp[@"code"] integerValue];
-    if (code != 0) {
-        TDLog(@"LIC", @"activate 失败: %ld %@", (long)code, resp[@"msg"]);
-        return [TDNet humanMessageForCode:code serverMsg:resp[@"msg"]];
+static BOOL BDSyncNow(void) {
+    NSString *wxid = BDWxid() ?: KCGet(kKCAccountWxid) ?: @"";
+    NSDictionary *resp = [TDNet syncPostPath:@"packs"
+                                        body:@{ @"device_id": [TDLicense deviceID],
+                                                @"wxid"      : wxid }];
+    NSInteger code = resp ? [resp[@"code"] integerValue] : -1;
+    id arr = resp[@"data"][@"packs"];
+    if (code != 0 || ![arr isKindOfClass:[NSArray class]]) {
+        TDLog(@"LIC", @"报到失败: %ld（沿用缓存清单）", (long)code);
+        return NO;
     }
-    NSString *token = resp[@"data"][@"token"];
-    if (![token isKindOfClass:[NSString class]] || !token.length) return @"激活响应异常";
-    KCSet(kKCAccountToken, token);
-    KCSet(kKCAccountCard, card);
-    KCSet(kKCAccountLastVerify,
-          [NSString stringWithFormat:@"%.0f", [[NSDate date] timeIntervalSince1970]]);
-    BDSetState(TDLicenseStateActive);
-    TDLog(@"LIC", @"激活成功，设备 %@", [TDLicense deviceID]);
-    return nil;
+    BDSaveEnts(arr);
+    if (wxid.length) KCSet(kKCAccountWxid, wxid);
+    NSUInteger owned = 0;
+    for (NSDictionary *p in arr) {
+        if ([p isKindOfClass:[NSDictionary class]] && [p[@"owned"] boolValue]) owned++;
+    }
+    TDLog(@"LIC", @"报到成功：%lu 个包（owned %lu）",
+          (unsigned long)arr.count, (unsigned long)owned);
+    return YES;
 }
 
 // ────── 实现 ──────
 
 @implementation TDLicense
 
-+ (BOOL)isActiveNow {
-    BDRestoreFromKeychain();
-    return s_active;
++ (void)refreshEntitlementsWithCompletion:(void (^)(BOOL))completion {
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        BOOL ok = BDSyncNow();
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [[NSNotificationCenter defaultCenter]
+                postNotificationName:TDLicenseStateChangedNotification object:nil];
+            if (completion) completion(ok);
+        });
+    });
 }
 
-+ (TDLicenseState)state {
-    BDRestoreFromKeychain();
-    return s_state;
++ (void)refreshEntitlements {
+    [self refreshEntitlementsWithCompletion:nil];
 }
 
-+ (NSString *)currentToken { return KCGet(kKCAccountToken); }
++ (void)activateLicense:(NSString *)license
+             completion:(void (^)(BOOL ok, NSString *message))completion {
+    NSString *trimmed = [license stringByTrimmingCharactersInSet:
+                         [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        void (^done)(BOOL, NSString *) = ^(BOOL ok, NSString *msg) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                if (completion) completion(ok, msg);
+            });
+        };
+
+        if (!trimmed.length) { done(NO, @"请输入激活码"); return; }
+
+        // 绑定主键就是 wxid，抓不到不发请求
+        NSString *wxid = BDWxid();
+        if (!wxid.length) { done(NO, @"请先登录微信后再激活"); return; }
+
+        NSDictionary *body = @{ @"license"   : trimmed,
+                                @"device_id" : [TDLicense deviceID],
+                                @"wxid"      : wxid,
+                                @"sys"       : [NSString stringWithFormat:@"iOS %@",
+                                                [UIDevice currentDevice].systemVersion],
+                                @"model"     : BDModel() };
+        NSDictionary *resp = [TDNet syncPostPath:@"activate" body:body];
+        NSInteger code = resp ? [resp[@"code"] integerValue] : -1;
+        if (code != 0) {
+            TDLog(@"LIC", @"activate 失败: %ld %@", (long)code, resp[@"msg"] ?: @"网络失败");
+            done(NO, [TDNet humanMessageForCode:code serverMsg:resp[@"msg"]]);
+            return;
+        }
+
+        // 入账成功：码即忘，缓存 wxid，立刻同步报到把新授权拉回来（UI 重建即见[下载]）
+        KCSet(kKCAccountWxid, wxid);
+        BDSyncNow();
+        NSString *packName = resp[@"data"][@"pack_name"];
+        TDLog(@"LIC", @"激活成功: %@", packName);
+        done(YES, [NSString stringWithFormat:@"已激活 · %@",
+                   [packName isKindOfClass:[NSString class]] && packName.length ? packName : @"气泡包"]);
+    });
+}
+
++ (NSArray<NSDictionary *> *)entitlements {
+    BDLoadEnts();
+    return s_ents;
+}
+
++ (BOOL)entitlementsExpired {
+    double last = BDLastSync();
+    return !(last > 0 && [[NSDate date] timeIntervalSince1970] - last < kCacheSeconds);
+}
+
++ (BOOL)isOwnedPack:(NSString *)name {
+    if (!name.length) return NO;
+    BDLoadEnts();
+    for (NSDictionary *p in s_ents) {
+        if ([p isKindOfClass:[NSDictionary class]] && [p[@"owned"] boolValue]
+            && [name isEqualToString:p[@"name"]]) return YES;
+    }
+    return NO;
+}
+
++ (BOOL)gateOpenForPack:(NSString *)name {
+    if ([self entitlementsExpired]) return NO;
+    return [self isOwnedPack:name];
+}
+
++ (NSString *)keyForPack:(NSString *)name {
+    if (!name.length) return nil;
+    BDLoadEnts();
+    for (NSDictionary *p in s_ents) {
+        if ([p isKindOfClass:[NSDictionary class]] && [p[@"owned"] boolValue]
+            && [name isEqualToString:p[@"name"]]) {
+            return [p[@"key"] isKindOfClass:[NSString class]] ? p[@"key"] : nil;
+        }
+    }
+    return nil;
+}
+
++ (NSString *)currentWxid {
+    NSString *w = BDWxid();
+    if (w.length) return w;
+    return KCGet(kKCAccountWxid);
+}
 
 + (NSString *)deviceID {
     NSString *idfv = [UIDevice currentDevice].identifierForVendor.UUIDString;
@@ -207,76 +301,6 @@ static NSString *BDActivateSync(NSString *card) {
 + (NSString *)deviceTail {
     NSString *d = [self deviceID];
     return d.length >= 4 ? [d substringFromIndex:d.length - 4] : d;
-}
-
-+ (void)startupCheck {
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
-        BDRestoreFromKeychain();
-        NSString *token = KCGet(kKCAccountToken);
-        NSString *card  = KCGet(kKCAccountCard);
-
-        if (!token.length && !card.length) {
-            BDSetState(TDLicenseStateNotActivated);   // 无凭证：hook 全放行（首次调用不触发通知变更则无副作用）
-            return;
-        }
-
-        if (token.length) {
-            NSDictionary *resp = [TDNet syncPostPath:@"verify"
-                                                body:@{ @"token"    : token,
-                                                        @"device_id": [self deviceID] }];
-            NSInteger code = resp ? [resp[@"code"] integerValue] : -1;
-            if (code == 0) {
-                KCSet(kKCAccountLastVerify,
-                      [NSString stringWithFormat:@"%.0f", [[NSDate date] timeIntervalSince1970]]);
-                BDSetState(TDLicenseStateActive);
-                return;
-            }
-            if (code == 2001) {
-                // token 失效 → 用卡密自动重激活（无感续期）
-                TDLog(@"LIC", @"token 失效，尝试卡密自动重激活");
-                if (card.length) {
-                    NSString *err = BDActivateSync(card);
-                    if (!err) return;
-                    TDLog(@"LIC", @"自动重激活失败: %@", err);
-                    // 卡被停用(1002)/绑到别的设备(1003) → 清凭证回未激活；网络类错误 → 走兜底
-                    if ([err containsString:@"停用"] || [err containsString:@"绑定"]) {
-                        KCDelete(kKCAccountToken);
-                        KCDelete(kKCAccountCard);
-                        KCDelete(kKCAccountLastVerify);
-                        BDSetState(TDLicenseStateNotActivated);
-                        return;
-                    }
-                } else {
-                    KCDelete(kKCAccountToken);
-                    BDSetState(TDLicenseStateNotActivated);
-                    return;
-                }
-            } else if (code != -1) {
-                // 服务器明确拒绝（理论上 verify 只有 0/2001，防御性处理）
-                TDLog(@"LIC", @"verify 异常响应: %ld", (long)code);
-            }
-            // 网络失败(-1) → 兜底判断（restore 已算好，若超期则维持）
-            BDRestoreFromKeychain();
-            BDSetState(s_state);
-            return;
-        }
-
-        // 有卡密无 token（异常残留）→ 直接重激活
-        NSString *err = BDActivateSync(card);
-        if (err) TDLog(@"LIC", @"残留卡密重激活失败: %@", err);
-    });
-}
-
-+ (void)activateCard:(NSString *)card
-          completion:(void (^)(BOOL ok, NSString *message))completion {
-    NSString *trimmed = [card stringByTrimmingCharactersInSet:
-                         [NSCharacterSet whitespaceAndNewlineCharacterSet]];
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
-        NSString *err = trimmed.length ? BDActivateSync(trimmed) : @"请输入卡密";
-        dispatch_async(dispatch_get_main_queue(), ^{
-            if (completion) completion(err == nil, err ?: @"激活成功");
-        });
-    });
 }
 
 @end

@@ -18,8 +18,8 @@
 /// 数据 md5 校验（大小写不敏感）
 + (BOOL)verifyMd5:(NSString *)md5 ofData:(NSData *)data;
 
-/// 解密 .bdpack 并解压到 packs/<packName>/（覆盖旧目录）
-/// key = /download 下发的 32 字符密钥；失败 *error 带人话描述
+/// 解密 .bdpack 并解压到 packs/<packName>/（覆盖旧版本）
+/// key = 授权清单随 owned 包下发的 32 字符密钥；失败 *error 带人话描述
 + (BOOL)installBdpackData:(NSData *)blob
                       key:(NSString *)key
                  packName:(NSString *)packName
