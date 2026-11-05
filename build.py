@@ -26,7 +26,7 @@ VERIFY_U8  = ['BubbleDeck', 'TDBubbleEntry', 'TDBubbleEngine', 'TDPackLoader',
               '_Dark', 'TDNet', 'TDLicense', 'TDZip', 'qb.xhhan.xyz',
               'BDPK', 'installBdpackData', 'refreshEntitlements',
               'gateOpenForPack', 'setPackSource', 'pluginEnabled',
-              'BDP2', 'TDContainer', 'pack.bdpack', 'bdpack2|', 'CCCryptorGCMOneshotDecrypt']
+              'BDP2', 'TDContainer', 'pack.bdpack', 'bdpack2|']
 VERIFY_U16 = ['气泡包', '微信默认', '使用中', '日志记录', '重新加载', '本地气泡引擎',
               '激活成功', '激活失败', '下载', '已安装',
               '正在获取在线包列表', '已激活', '请先登录微信后再激活',
