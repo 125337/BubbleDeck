@@ -48,7 +48,7 @@
     UIScrollView *scroll = BDNewScroll(self);
 
     CGFloat wIn = w - 30;
-    CGFloat y = 96;   // 静态下移：内容块短，顶在导航栏下面显得头重脚轻
+    CGFloat y = 46;   // 静态下移：内容块短，顶在导航栏下面显得头重脚轻
 
     // ── 头部：图标 + 版本 + 状态胶囊（标题在微信导航栏上，不重复） ──
     {
