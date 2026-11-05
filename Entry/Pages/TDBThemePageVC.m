@@ -54,18 +54,22 @@
     // 微信默认卡
     UIView *card = BDMakeCard(y, w, nil, @"微信默认",
                               @"不使用任何气泡包，恢复微信原生气泡",
-                              nil, active == nil);
+                              nil, active == nil, nil);
     UITapGestureRecognizer *dgr = [[UITapGestureRecognizer alloc]
         initWithTarget:self action:NSSelectorFromString(@"bdCardTap:")];
     [card addGestureRecognizer:dgr];
     [scroll addSubview:card];
     y += 76 + 12;
 
-    // 只显示已下载且授权有效的包：在线来源但闸门关闭（封卡/换号/离线超期）的包不出现
+    // 本地已装的在线包全部显示，按授权状态标灰（封禁/未授权/待验证），点击时拦截
     BOOL anyShown = NO;
     for (NSString *name in packs) {
-        if ([[TDConfig sourceForPack:name] isEqualToString:@"online"]
-            && ![TDLicense gateOpenForPack:name]) continue;
+        NSString *badge = nil;
+        if ([[TDConfig sourceForPack:name] isEqualToString:@"online"]) {
+            if ([TDLicense entitlementsExpired])      badge = @"待验证";
+            else if ([TDLicense isRevokedPack:name])  badge = @"已封禁";
+            else if (![TDLicense isOwnedPack:name])   badge = @"未授权";
+        }
 
         NSString *dir = [TDPackLoader packDirForName:name];
         NSInteger imgCount = 0;
@@ -103,7 +107,8 @@
         [del addTarget:self action:@selector(bdDeleteTap:) forControlEvents:UIControlEventTouchUpInside];
         [row addSubview:del];
 
-        UIView *c = BDMakeCard(0, w, name, name, subtitle, thumb, [active isEqualToString:name]);
+        UIView *c = BDMakeCard(0, w, name, name, subtitle, thumb,
+                               [active isEqualToString:name], badge);
         c.tag = 1001;
         UITapGestureRecognizer *gr = [[UITapGestureRecognizer alloc]
             initWithTarget:self action:NSSelectorFromString(@"bdCardTap:")];
@@ -149,12 +154,22 @@
 
     if ([pack isEqualToString:active]) return; // 已在使用，无操作
 
-    // 安全网：主题页理论上只显示闸门放行的包，这里再拦一次（授权可能在页面停留期间失效）
+    // 安全网：主题页会显示标灰的不可用包，这里按状态拦截（授权可能在页面停留期间变化）
     if ([[TDConfig sourceForPack:pack] isEqualToString:@"online"]
         && ![TDLicense gateOpenForPack:pack]) {
-        BDShowAlert(self, @"授权不可用",
-                    [NSString stringWithFormat:@"「%@」当前无有效授权，请联网后重试或重新购买激活码。", pack],
-                    @"好");
+        if ([TDLicense entitlementsExpired]) {
+            BDShowAlert(self, @"暂时无法验证",
+                        [NSString stringWithFormat:@"「%@」需要联网验证授权后才能使用，请检查网络后重进本页。", pack],
+                        @"好");
+        } else if ([TDLicense isRevokedPack:pack]) {
+            BDShowAlert(self, @"已被封禁",
+                        [NSString stringWithFormat:@"「%@」的激活码已被封禁，如有疑问请联系卖家。", pack],
+                        @"好");
+        } else {
+            BDShowAlert(self, @"未授权",
+                        [NSString stringWithFormat:@"当前微信号没有「%@」的授权，请激活对应激活码后使用。", pack],
+                        @"好");
+        }
         return;
     }
 

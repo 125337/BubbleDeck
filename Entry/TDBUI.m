@@ -125,18 +125,20 @@ UIView *BDRowCard(UIViewController *vc, UIScrollView *scroll, CGFloat y,
 }
 
 // ────── 气泡包卡片 ──────
-// packName = nil 表示「微信默认」卡；isActive 决定右侧徽章样式
+// packName = nil 表示「微信默认」卡；isActive 决定右侧徽章样式；
+// badgeText 非空 = 不可用状态（灰显 + 灰色角标）
 
 UIView *BDMakeCard(CGFloat y, CGFloat w,
                    NSString *packName, NSString *title,
-                   NSString *subtitle, UIImage *thumb, BOOL isActive) {
+                   NSString *subtitle, UIImage *thumb, BOOL isActive, NSString *badgeText) {
     UIView *card = [[UIView alloc] initWithFrame:CGRectMake(15, y, w - 30, 76)];
     card.backgroundColor = BDCardBg();
     card.layer.cornerRadius = 15;
     if (@available(iOS 13.0, *)) card.layer.cornerCurve = kCACornerCurveContinuous;
     if (@available(iOS 13.0, *)) {
-        if (isActive) card.layer.borderWidth = 1.5, card.layer.borderColor = BDTint().CGColor;
+        if (isActive && !badgeText) card.layer.borderWidth = 1.5, card.layer.borderColor = BDTint().CGColor;
     }
+    if (badgeText.length) card.alpha = 0.6;
 
     // 缩略图：48pt 圆角；无图用包名首字占位
     UIView *thumbView;
@@ -176,7 +178,17 @@ UIView *BDMakeCard(CGFloat y, CGFloat w,
     subLb.text = subtitle;
     [card addSubview:subLb];
 
-    if (isActive) {
+    if (badgeText.length) {
+        UILabel *badge = [[UILabel alloc] initWithFrame:CGRectMake(w - 30 - 66, 28, 58, 22)];
+        badge.backgroundColor = BDChipBg();
+        badge.textColor = BDSecondaryText();
+        badge.font = [UIFont systemFontOfSize:11 weight:UIFontWeightMedium];
+        badge.textAlignment = NSTextAlignmentCenter;
+        badge.layer.cornerRadius = 11;
+        badge.clipsToBounds = YES;
+        badge.text = badgeText;
+        [card addSubview:badge];
+    } else if (isActive) {
         UILabel *badge = [[UILabel alloc] initWithFrame:CGRectMake(w - 30 - 66, 28, 58, 22)];
         badge.backgroundColor = BDTint();
         badge.textColor = [UIColor whiteColor];

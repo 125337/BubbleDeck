@@ -151,15 +151,19 @@ async def packs(request: Request):
     if not rate_hit("packs", f"{device}|{client_ip(request)}", PACKS_HOURLY):
         return resp(429, "请求过于频繁，请稍后再试")
 
-    # owned = 该 wxid 名下 state=active 的卡
-    owned = set()
+    # owned = 该 wxid 名下 state=active 的卡；revoked = 曾绑定此 wxid、现已封禁的包
+    owned, revoked = set(), set()
     try:
         for fn in os.listdir(CARDS_DIR):
             if not fn.endswith(".json"):
                 continue
             card = load_card(fn[:-5])
-            if card and card.get("state") == "active" and card.get("bind_wxid") == wxid:
+            if not card or card.get("bind_wxid") != wxid:
+                continue
+            if card.get("state") == "active":
                 owned.add(card.get("pack_name"))
+            elif card.get("state") == "revoked":
+                revoked.add(card.get("pack_name"))
     except FileNotFoundError:
         pass
 
@@ -180,7 +184,7 @@ async def packs(request: Request):
             else:
                 item["key"], item["ver"] = None, None
             out.append(item)
-    return resp(data={"packs": out})
+    return resp(data={"packs": out, "revoked": sorted(x for x in revoked if x)})
 
 @app.get("/bd/ping")
 async def ping():

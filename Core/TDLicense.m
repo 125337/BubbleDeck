@@ -76,9 +76,10 @@ static void BDCleanLegacy(void) {
 
 // ────── 内存缓存（热路径安全；清单含 key，仅进程内存，绝不落盘） ──────
 
-static NSArray<NSDictionary *> *s_ents = nil;   // 解析后的 packs 清单（含包密钥）
+static NSArray<NSDictionary *> *s_ents = nil;      // 解析后的 packs 清单（含包密钥）
+static NSSet<NSString *> *s_revoked = nil;         // 服务器 revoked 名单（曾激活现封禁）
 static BOOL s_entsLoaded = NO;
-static double s_lastSync = 0;                   // 本进程上次报到成功时间戳；0 = 从未
+static double s_lastSync = 0;                      // 本进程上次报到成功时间戳；0 = 从未
 static BOOL s_syncing = NO;
 
 static void BDLoadEnts(void) {
@@ -87,8 +88,9 @@ static void BDLoadEnts(void) {
     BDCleanLegacy();                            // V3 遗留的落盘清单/时间戳清理一次
 }
 
-static void BDSaveEnts(NSArray *packs) {
+static void BDSaveEnts(NSArray *packs, NSSet<NSString *> *revoked) {
     s_ents = packs;
+    s_revoked = revoked ?: [NSSet set];
     s_entsLoaded = YES;
     s_lastSync = [[NSDate date] timeIntervalSince1970];
 }
@@ -156,14 +158,21 @@ static BOOL BDSyncNow(void) {
         TDLog(@"LIC", @"报到失败: %ld（沿用缓存清单）", (long)code);
         return NO;
     }
-    BDSaveEnts(arr);
+    // revoked 名单（可选字段，旧服务器无此字段 → 空集）
+    id rv = resp[@"data"][@"revoked"];
+    NSMutableSet<NSString *> *revoked = [NSMutableSet set];
+    if ([rv isKindOfClass:[NSArray class]]) {
+        for (id n in rv)
+            if ([n isKindOfClass:[NSString class]] && n.length) [revoked addObject:n];
+    }
+    BDSaveEnts(arr, revoked);
     if (wxid.length) KCSet(kKCAccountWxid, wxid);
     NSUInteger owned = 0;
     for (NSDictionary *p in arr) {
         if ([p isKindOfClass:[NSDictionary class]] && [p[@"owned"] boolValue]) owned++;
     }
-    TDLog(@"LIC", @"报到成功：%lu 个包（owned %lu）",
-          (unsigned long)[arr count], (unsigned long)owned);
+    TDLog(@"LIC", @"报到成功：%lu 个包（owned %lu，revoked %lu）",
+          (unsigned long)[arr count], (unsigned long)owned, (unsigned long)revoked.count);
     return YES;
 }
 
@@ -245,6 +254,12 @@ static BOOL BDSyncNow(void) {
             && [name isEqualToString:p[@"name"]]) return YES;
     }
     return NO;
+}
+
++ (BOOL)isRevokedPack:(NSString *)name {
+    if (!name.length) return NO;
+    BDLoadEnts();
+    return [s_revoked containsObject:name];
 }
 
 + (BOOL)gateOpenForPack:(NSString *)name {

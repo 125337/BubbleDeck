@@ -45,6 +45,9 @@ FOUNDATION_EXPORT NSNotificationName const TDLicenseStateChangedNotification;
 /// owned 包的下载密钥（未拥有返回 nil）
 + (nullable NSString *)keyForPack:(NSString *)name;
 
+/// 是否在服务器 revoked 名单（该 wxid 曾激活、现已封禁的包）
++ (BOOL)isRevokedPack:(NSString *)name;
+
 // ── 网络请求参数 ──
 
 /// wxid：CContactMgr 实时抓取，失败回落 Keychain 缓存；都没有返回 nil

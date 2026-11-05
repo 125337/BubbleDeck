@@ -35,9 +35,10 @@ UIView *BDRowCard(UIViewController *vc, UIScrollView *scroll, CGFloat y,
                   NSString *title, SEL tapSel);
 
 // 气泡包卡片（packName = nil 表示「微信默认」卡；isActive 决定右侧徽章样式）。
+// badgeText 非空 → 卡片灰显并显示该角标（如「已封禁」），替代箭头/使用中徽章。
 // 点按手势由调用方挂；packName 挂在卡片 associated object "pack" 上。
 UIView *BDMakeCard(CGFloat y, CGFloat w, NSString *packName, NSString *title,
-                   NSString *subtitle, UIImage *thumb, BOOL isActive);
+                   NSString *subtitle, UIImage *thumb, BOOL isActive, NSString *badgeText);
 
 // ── 工具 ──
 NSInteger BDPackImageCount(NSString *dir);   // 解包目录位图文件数
