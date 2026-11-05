@@ -162,8 +162,11 @@ static BOOL BDSyncNow(void) {
     id rv = resp[@"data"][@"revoked"];
     NSMutableSet<NSString *> *revoked = [NSMutableSet set];
     if ([rv isKindOfClass:[NSArray class]]) {
-        for (id n in rv)
-            if ([n isKindOfClass:[NSString class]] && n.length) [revoked addObject:n];
+        for (id n in rv) {
+            if (![n isKindOfClass:[NSString class]]) continue;
+            NSString *s = (NSString *)n;
+            if (s.length) [revoked addObject:s];
+        }
     }
     BDSaveEnts(arr, revoked);
     if (wxid.length) KCSet(kKCAccountWxid, wxid);
