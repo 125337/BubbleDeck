@@ -14,6 +14,7 @@
 #import "../../Core/TDLicense.h"
 #import "../../Engine/TDPackLoader.h"
 #import "../../Engine/TDContainer.h"
+#import <objc/runtime.h>
 
 @interface TDBThemePageVC () <UIScrollViewDelegate>
 @property (nonatomic, strong) NSMutableArray<TDBPackRowView *> *rows;
