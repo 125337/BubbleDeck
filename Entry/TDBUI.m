@@ -138,7 +138,7 @@ UIView *BDMakeCard(CGFloat y, CGFloat w,
     if (@available(iOS 13.0, *)) {
         if (isActive && !badgeText) card.layer.borderWidth = 1.5, card.layer.borderColor = BDTint().CGColor;
     }
-    if (badgeText.length) card.alpha = 0.6;
+    // 灰显只靠角标：卡片必须保持不透明——垫在底下的红色删除按钮会透过半透明卡片露出来
 
     // 缩略图：48pt 圆角；无图用包名首字占位
     UIView *thumbView;
