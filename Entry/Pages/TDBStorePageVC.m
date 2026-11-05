@@ -161,6 +161,7 @@ didCompleteWithError:(NSError *)error {
 
 - (void)buildPage {
     for (UIView *sub in self.view.subviews) [sub removeFromSuperview];
+    BDInstallGlassBackdrop(self.view);   // 中性纹理装饰层：背景之上、scroll 之下，不随列表滚动
 
     if (!s_dlButtons) s_dlButtons = [NSMutableDictionary dictionary];
     [s_dlButtons removeAllObjects];
@@ -211,15 +212,11 @@ didCompleteWithError:(NSError *)error {
                 // 引导高亮：第一个 owned 且未安装的包（下一步动作）
                 BOOL firstTodo = !has && !busy && !highlighted && !s_downloading;
 
-                UIView *card = [[UIView alloc] initWithFrame:CGRectMake(15, y, wIn, 64)];
-                card.backgroundColor = BDCardBg();
-                card.layer.cornerRadius = 15;
-                if (@available(iOS 13.0, *)) {
-                    card.layer.cornerCurve = kCACornerCurveContinuous;
-                    if (firstTodo) {
-                        card.layer.borderWidth = 1.5;
-                        card.layer.borderColor = BDTint().CGColor;
-                    }
+                UIView *card = BDGlassCard(CGRectMake(15, y, wIn, 64), 15);   // 分层玻璃：包卡
+                if (firstTodo) {
+                    // 引导高亮：下一步动作的包
+                    card.layer.borderWidth = 1.5;
+                    card.layer.borderColor = BDTint().CGColor;
                 }
 
                 UILabel *nm = [[UILabel alloc] initWithFrame:CGRectMake(16, 11, wIn - 160, 20)];
@@ -252,8 +249,7 @@ didCompleteWithError:(NSError *)error {
                     else dl.backgroundColor = [UIColor colorWithWhite:0.9 alpha:1.0];
                 } else {
                     [dl setTitle:@"下载" forState:UIControlStateNormal];
-                    dl.backgroundColor = BDTint();
-                    dl.tintColor = [UIColor whiteColor];
+                    BDStyleAmberGlassButton(dl);   // tinted glass：磨砂 + 琥珀 overlay + 白描边
                     objc_setAssociatedObject(dl, "pack", name, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
                     [dl addTarget:self action:@selector(bdDownloadTap:)
                  forControlEvents:UIControlEventTouchUpInside];
