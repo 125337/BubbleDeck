@@ -466,17 +466,6 @@ static void BDSetupCache(void) {
     return nil;
 }
 
-- (NSInteger)imageCount {
-    NSInteger files = 0;
-    for (NSString *n in self.entries) {
-        if (![n hasPrefix:@"Assets/"]) continue;
-        NSString *ext = n.pathExtension.lowercaseString;
-        if ([ext isEqualToString:@"png"] || [ext isEqualToString:@"jpg"] ||
-            [ext isEqualToString:@"jpeg"] || [ext isEqualToString:@"webp"]) files++;
-    }
-    return files;
-}
-
 // ────── 下载安装（零解压、零明文 PNG 落盘） ──────
 
 + (BOOL)installBdpackData:(NSData *)blob

@@ -41,7 +41,6 @@ UIView *BDMakeCard(CGFloat y, CGFloat w, NSString *packName, NSString *title,
                    NSString *subtitle, UIImage *thumb, BOOL isActive, NSString *badgeText);
 
 // ── 工具 ──
-NSInteger BDPackImageCount(NSString *dir);   // 解包目录位图文件数
 NSString *BDFileSize(long long bytes);
 
 // ── 弹窗 ──

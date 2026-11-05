@@ -86,6 +86,8 @@
     it.li.querySelector('.qstat').textContent = '打包中…';
     var fd = new FormData();
     fd.append('file', it.f);
+    var ai = document.getElementById('authorinput');
+    if (ai && ai.value.trim()) fd.append('author', ai.value.trim());   /* 作者名：客户端主题页副标题 */
     if (it.ver) fd.append('version', it.ver);          /* 冲突重传时用户改的版本号 */
     fetch(BASE + '/api/packs/upload', { method: 'POST', body: fd, credentials: 'same-origin' })
       .then(function (r) {

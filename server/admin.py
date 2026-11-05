@@ -355,11 +355,14 @@ def _fallback_name(filename: str) -> str:
     base = os.path.basename((filename or "").replace("\\", "/")).strip()
     return base[:-4].strip() if base.lower().endswith(".zip") else base
 
-def _process_zip(raw: bytes, filename: str, name: str = "", version: str = "", owner: str = "") -> dict:
+def _process_zip(raw: bytes, filename: str, name: str = "", version: str = "", owner: str = "",
+                 author: str = "") -> dict:
     """zip → 归一化 → BDP2 打包 → 双表登记 → 落盘（上传链路唯一实现）。
     成功返回 {"ok":True,"data":{...}}，失败 {"ok":False,"msg":"..."}。
     包名留空 = 文件名兜底，版本留空 = 1.0；info.json 强制重写保证盘上 version ≡ AAD version。
-    owner：商家 id（admin 直营传空）"""
+    owner：商家 id（admin 直营传空）
+    author：作者名（客户端主题页副标题展示用）。表单值优先，zip 内原 info.json 的 author 兜底，
+    两者都无则不写该字段（客户端显示「未知作者」）"""
     name = (name or _fallback_name(filename)).strip()
     version = (version or "1.0").strip()
     if not name or len(name) > 64 or "/" in name or "\\" in name:
@@ -407,9 +410,21 @@ def _process_zip(raw: bytes, filename: str, name: str = "", version: str = "", o
                     for f in fs if f.lower().endswith(IMG_EXT))
         if n_img == 0:
             return {"ok": False, "msg": "包里没有气泡图标（Assets/ 下或根级需要至少一张图片），拒收"}
-        # info.json 强制重写：AAD 一致性铁律
+        # info.json 强制重写：AAD 一致性铁律。author：表单优先，zip 内原 info.json 兜底（展示用）
+        if not author:
+            try:
+                with open(os.path.join(root, "info.json"), encoding="utf-8") as f:
+                    orig = json.load(f)
+                if isinstance(orig, dict) and isinstance(orig.get("author"), str):
+                    author = orig["author"].strip()
+            except Exception:
+                pass
+        author = author[:64]
+        info = {"name": name, "version": version}
+        if author:
+            info["author"] = author
         with open(os.path.join(root, "info.json"), "w", encoding="utf-8") as f:
-            json.dump({"name": name, "version": version}, f, ensure_ascii=False)
+            json.dump(info, f, ensure_ascii=False)
         try:
             if TOOLS_DIR not in sys.path:
                 sys.path.insert(0, TOOLS_DIR)
@@ -451,7 +466,8 @@ async def api_packs_upload(request: Request):
     raw = await up.read()
     res = _process_zip(raw, up.filename,
                        name=str(form.get("name") or "").strip(),
-                       version=str(form.get("version") or "").strip())
+                       version=str(form.get("version") or "").strip(),
+                       author=str(form.get("author") or "").strip())
     if res["ok"]:
         return JSONResponse({"code": 0, "msg": "", "data": res["data"]})
     j = {"code": 2 if res.get("conflict") else 1, "msg": res["msg"]}

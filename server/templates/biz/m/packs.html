@@ -10,6 +10,8 @@
       <span>单个 ≤20MB · 自动加密打包托管</span>
       <input id="fileinput" type="file" accept=".zip,application/zip" multiple hidden>
     </div>
+    <div class="fld" style="margin-top:10px"><label for="authorinput">作者（可选，客户端主题页展示）</label>
+      <input id="authorinput" type="text" maxlength="64" placeholder="留空则取 zip 内 info.json 的 author"></div>
     <ul id="queue" class="queue" aria-live="polite"></ul>
     <div id="batchbar" class="batchbar" hidden>
       <span id="batchsum" class="dim"></span>

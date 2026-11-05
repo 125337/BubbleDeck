@@ -253,7 +253,8 @@ async def api_packs_upload(request: Request):
     res = _process_zip(raw, up.filename,
                        name=str(form.get("name") or "").strip(),
                        version=str(form.get("version") or "").strip(),
-                       owner=m["id"])
+                       owner=m["id"],
+                       author=str(form.get("author") or "").strip())
     if res["ok"]:
         return JSONResponse({"code": 0, "msg": "", "data": res["data"]})
     j = {"code": 2 if res.get("conflict") else 1, "msg": res["msg"]}

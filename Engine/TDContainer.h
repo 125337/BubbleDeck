@@ -32,9 +32,6 @@
 /// 单包缓存清除（重装新版本后调用）
 + (void)purgeContainerForPack:(NSString *)packName;
 
-/// Assets/ 前缀位图条目数（主题页「N 图」）
-- (NSInteger)imageCount;
-
 /// 条目是否存在 / 取条目数据（stored 直取、deflate 按需 inflate）
 - (BOOL)hasEntry:(NSString *)path;
 - (nullable NSData *)dataForEntry:(NSString *)path;

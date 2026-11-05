@@ -215,19 +215,6 @@ UIView *BDMakeCard(CGFloat y, CGFloat w,
 
 // ────── 工具 ──────
 
-// 包图片数：统计解包目录里的位图文件
-NSInteger BDPackImageCount(NSString *dir) {
-    NSInteger files = 0;
-    NSDirectoryEnumerator *en = [[NSFileManager defaultManager] enumeratorAtPath:dir];
-    NSString *rel;
-    while ((rel = [en nextObject])) {
-        NSString *ext = rel.pathExtension.lowercaseString;
-        if ([ext isEqualToString:@"png"] || [ext isEqualToString:@"jpg"] ||
-            [ext isEqualToString:@"jpeg"] || [ext isEqualToString:@"webp"]) files++;
-    }
-    return files;
-}
-
 NSString *BDFileSize(long long bytes) {
     if (bytes >= 1024 * 1024) return [NSString stringWithFormat:@"%.1f MB", bytes / 1024.0 / 1024.0];
     if (bytes >= 1024) return [NSString stringWithFormat:@"%.0f KB", bytes / 1024.0];

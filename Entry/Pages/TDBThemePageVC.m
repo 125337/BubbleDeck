@@ -72,26 +72,33 @@
         }
 
         NSString *dir = [TDPackLoader packDirForName:name];
-        NSInteger imgCount = 0;
         UIImage *thumb = nil;
-        // 分流：盘上常密包（V3）图片数/icon 走容器索引；明文目录包走原逻辑
+        // 分流：盘上常密包（V3）icon 走容器索引；明文目录包走原逻辑
         if (dir && [[NSFileManager defaultManager]
                     fileExistsAtPath:[dir stringByAppendingPathComponent:@"pack.bdpack"]]) {
             NSError *err = nil;
             TDContainer *c = [TDContainer cachedContainerForPack:name error:&err];
             if (c) {
-                imgCount = [c imageCount];
                 thumb = [UIImage imageWithData:[c dataForEntry:@"icon.png"]];
             } else {
                 TDLog(@"DEV", @"[主题页] 容器打开失败: %@ - %@", name, err.localizedDescription);
             }
         } else {
-            imgCount = dir ? BDPackImageCount(dir) : 0;
             thumb = dir
                 ? [UIImage imageWithContentsOfFile:[dir stringByAppendingPathComponent:@"icon.png"]]
                 : nil;
         }
-        NSString *subtitle = [NSString stringWithFormat:@"%ld 图", (long)imgCount];
+        // 副标题 = 作者名（info.json 安装时明文落盘，无需 key/容器/网络；
+        // 封禁、待验证、未授权卡均正常显示）。无 author 兜底「未知作者」。
+        NSString *author = nil;
+        if (dir) {
+            NSData *infoData = [NSData dataWithContentsOfFile:
+                                [dir stringByAppendingPathComponent:@"info.json"]];
+            id obj = infoData ? [NSJSONSerialization JSONObjectWithData:infoData options:0 error:nil] : nil;
+            id a = [obj isKindOfClass:[NSDictionary class]] ? obj[@"author"] : nil;
+            if ([a isKindOfClass:[NSString class]] && [(NSString *)a length]) author = a;
+        }
+        NSString *subtitle = author ?: @"未知作者";
 
         // 左滑删除容器：删除按钮垫底，卡片盖上可横向拖动（微信默认卡不可删）
         UIView *row = [[UIView alloc] initWithFrame:CGRectMake(0, y, w, 76)];
