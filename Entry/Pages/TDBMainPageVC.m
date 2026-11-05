@@ -48,14 +48,15 @@
     UIScrollView *scroll = BDNewScroll(self);
 
     CGFloat wIn = w - 30;
-    CGFloat y = 16;
+    CGFloat y = 96;   // 静态下移：内容块短，顶在导航栏下面显得头重脚轻
 
     // ── 头部：图标 + 版本 + 状态胶囊（标题在微信导航栏上，不重复） ──
     {
         CGFloat logoSize = 64;
         UIView *logo = [[UIView alloc] initWithFrame:CGRectMake((w - logoSize) / 2, y, logoSize, logoSize)];
         logo.backgroundColor = BDTint();
-        logo.layer.cornerRadius = 14;
+        logo.layer.cornerRadius = 12;
+        if (@available(iOS 13.0, *)) logo.layer.cornerCurve = kCACornerCurveContinuous;
         UILabel *bl = [[UILabel alloc] initWithFrame:logo.bounds];
         bl.text = @"B";
         bl.font = [UIFont boldSystemFontOfSize:30];
@@ -90,6 +91,7 @@
         pill.textAlignment = NSTextAlignmentCenter;
         pill.text = pillText;
         pill.layer.cornerRadius = 12;
+        if (@available(iOS 13.0, *)) pill.layer.cornerCurve = kCACornerCurveContinuous;
         pill.clipsToBounds = YES;
         pill.textColor = pillActive ? [UIColor whiteColor] : BDSecondaryText();
         pill.backgroundColor = pillActive ? BDTint() : BDChipBg();
@@ -102,6 +104,7 @@
         UIView *card = [[UIView alloc] initWithFrame:CGRectMake(15, y, wIn, 128)];
         card.backgroundColor = BDCardBg();
         card.layer.cornerRadius = 15;
+        if (@available(iOS 13.0, *)) card.layer.cornerCurve = kCACornerCurveContinuous;
 
         UILabel *lb = [[UILabel alloc] initWithFrame:CGRectMake(16, 0, wIn - 100, 48)];
         lb.font = [UIFont systemFontOfSize:15];
@@ -122,6 +125,7 @@
             UIControl *btn = [[UIControl alloc] initWithFrame:CGRectMake(16 + i * (btnW + 8), 54, btnW, 62)];
             btn.backgroundColor = BDChipBg();
             btn.layer.cornerRadius = 12;
+            if (@available(iOS 13.0, *)) btn.layer.cornerCurve = kCACornerCurveContinuous;
 
             CGFloat iy = 8;
             if (@available(iOS 13.0, *)) {

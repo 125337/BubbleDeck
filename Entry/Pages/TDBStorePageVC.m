@@ -228,7 +228,7 @@ didCompleteWithError:(NSError *)error {
                 [card addSubview:nm];
 
                 UILabel *sb = [[UILabel alloc] initWithFrame:CGRectMake(16, 34, wIn - 160, 16)];
-                sb.font = [UIFont systemFontOfSize:12];
+                sb.font = [UIFont systemFontOfSize:13];
                 sb.textColor = BDSecondaryText();
                 sb.text = [NSString stringWithFormat:@"v%@ · %@",
                            p[@"version"] ?: @"1.0", BDFileSize([p[@"size"] longLongValue])];
@@ -236,7 +236,8 @@ didCompleteWithError:(NSError *)error {
 
                 UIButton *dl = [UIButton buttonWithType:UIButtonTypeSystem];
                 dl.frame = CGRectMake(wIn - 102, 16, 86, 32);
-                dl.layer.cornerRadius = 10;
+                dl.layer.cornerRadius = 11;
+                if (@available(iOS 13.0, *)) dl.layer.cornerCurve = kCACornerCurveContinuous;
                 dl.titleLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightMedium];
                 if (has) {
                     [dl setTitle:@"已安装" forState:UIControlStateNormal];
