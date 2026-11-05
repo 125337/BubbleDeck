@@ -107,6 +107,9 @@
         del.frame = CGRectMake(w - 15 - 84, 0, 84, 76);
         del.backgroundColor = [UIColor colorWithRed:1.0 green:0.23 blue:0.19 alpha:1.0];
         del.layer.cornerRadius = 15;
+        // 必须与卡片同曲线（continuous）：否则圆形弧与 squircle 轮廓差几像素，
+        // 红色会从卡片圆角缝隙里露出来
+        if (@available(iOS 13.0, *)) del.layer.cornerCurve = kCACornerCurveContinuous;
         [del setTitle:@"删除" forState:UIControlStateNormal];
         [del setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
         del.titleLabel.font = [UIFont systemFontOfSize:15];
