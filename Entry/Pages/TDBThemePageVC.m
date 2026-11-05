@@ -41,7 +41,6 @@
 
 - (void)buildPage {
     for (UIView *sub in self.view.subviews) [sub removeFromSuperview];
-    BDInstallGlassBackdrop(self.view);   // 中性纹理装饰层：背景之上、scroll 之下，不随列表滚动
 
     CGFloat w = self.view.bounds.size.width;
     UIScrollView *scroll = BDNewScroll(self);

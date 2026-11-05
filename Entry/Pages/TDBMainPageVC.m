@@ -43,7 +43,6 @@
 
 - (void)buildPage {
     for (UIView *sub in self.view.subviews) [sub removeFromSuperview];
-    BDInstallGlassBackdrop(self.view);   // 中性纹理装饰层：背景之上、scroll 之下，不随列表滚动
 
     CGFloat w = self.view.bounds.size.width;
     UIScrollView *scroll = BDNewScroll(self);
@@ -102,7 +101,10 @@
 
     // ── 启用插件卡：总开关 + 三入口 ──
     {
-        UIView *card = BDGlassCard(CGRectMake(15, y, wIn, 128), 15);   // 分层玻璃：hero 状态卡
+        UIView *card = [[UIView alloc] initWithFrame:CGRectMake(15, y, wIn, 128)];
+        card.backgroundColor = BDCardBg();
+        card.layer.cornerRadius = 15;
+        if (@available(iOS 13.0, *)) card.layer.cornerCurve = kCACornerCurveContinuous;
 
         UILabel *lb = [[UILabel alloc] initWithFrame:CGRectMake(16, 0, wIn - 100, 48)];
         lb.font = [UIFont systemFontOfSize:15];
@@ -121,11 +123,9 @@
         CGFloat btnW = (wIn - 32 - 16) / 3;
         for (NSInteger i = 0; i < 3; i++) {
             UIControl *btn = [[UIControl alloc] initWithFrame:CGRectMake(16 + i * (btnW + 8), 54, btnW, 62)];
+            btn.backgroundColor = BDChipBg();
             btn.layer.cornerRadius = 12;
             if (@available(iOS 13.0, *)) btn.layer.cornerCurve = kCACornerCurveContinuous;
-            btn.clipsToBounds = YES;
-            // 三入口玻璃化：磨砂/原生玻璃，失败兜底回填灰胶囊
-            if (!BDInstallGlassMaterial(btn)) btn.backgroundColor = BDChipBg();
 
             CGFloat iy = 8;
             if (@available(iOS 13.0, *)) {

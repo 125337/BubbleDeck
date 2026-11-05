@@ -22,11 +22,20 @@ static UIColor *BDDeleteRedPressed(void) {
     return [UIColor colorWithRed:0.84 green:0.13 blue:0.10 alpha:1.0];
 }
 
-// 卡片按压态：透明黑 4% overlay（玻璃卡不改背景色）
+// 卡片按压态：比卡片底色暗一档（深色模式反而提亮一档）
+static UIColor *BDCardPressedBg(void) {
+    if (@available(iOS 13.0, *)) {
+        return [UIColor colorWithDynamicProvider:^UIColor *(UITraitCollection *tc) {
+            return tc.userInterfaceStyle == UIUserInterfaceStyleDark
+                ? [UIColor colorWithWhite:0.22 alpha:1.0]
+                : [UIColor colorWithWhite:0.94 alpha:1.0];
+        }];
+    }
+    return [UIColor colorWithRed:0.94 green:0.94 blue:0.95 alpha:1.0];
+}
 
 @interface TDBPackRowView () <UIGestureRecognizerDelegate>
 @property (nonatomic, strong) UIView *contentView;
-@property (nonatomic, strong) UIView *pressOverlay;  // 按压反馈：透明黑 4% overlay
 @property (nonatomic, strong) UIControl *deleteView;
 @property (nonatomic, assign) CGFloat offset;      // 当前平移量（负数 = 左滑）
 @property (nonatomic, assign) CGFloat panStart;
@@ -48,7 +57,7 @@ static UIColor *BDDeleteRedPressed(void) {
     _pack = [pack copy];
 
     // 不变量 1：全行唯一的圆角来源
-    self.backgroundColor = [UIColor clearColor]; // 不变量 3：玻璃磨砂在卡片内，容器保持透明
+    self.backgroundColor = BDCardBg();          // 不变量 3：底色与卡片一致
     self.layer.cornerRadius = kBDCorner;
     if (@available(iOS 13.0, *)) self.layer.cornerCurve = kCACornerCurveContinuous;
     self.clipsToBounds = YES;
@@ -58,17 +67,7 @@ static UIColor *BDDeleteRedPressed(void) {
     }
 
     _contentView = BDCardContentView(w, title, subtitle, thumb, active, badge);
-    // 卡片底 → 分层玻璃材质（失败兜底回填不透明白卡，绝不 crash；删除区红为实色不受影响）
-    if (!BDInstallGlassMaterial(_contentView)) _contentView.backgroundColor = BDCardBg();
     [self addSubview:_contentView];
-
-    // 按压反馈 overlay：盖在卡片内容之上（透明黑 4%，不改背景色）
-    _pressOverlay = [[UIView alloc] initWithFrame:_contentView.bounds];
-    _pressOverlay.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    _pressOverlay.userInteractionEnabled = NO;
-    _pressOverlay.backgroundColor = [UIColor blackColor];
-    _pressOverlay.alpha = 0;
-    [_contentView addSubview:_pressOverlay];
 
     if (deletable) {
         // 不变量 2：删除区初始整体位于容器裁剪区之外（x = w 起），静止时不可见
@@ -209,7 +208,7 @@ static UIColor *BDDeleteRedPressed(void) {
 
 - (void)bdSetPressed:(BOOL)pressed {
     if (pressed && _deleteView && _offset != 0) return;   // 滑开态不做按压反馈
-    _pressOverlay.alpha = pressed ? 0.04 : 0;             // 透明黑 4% overlay，不改背景色
+    _contentView.backgroundColor = pressed ? BDCardPressedBg() : BDCardBg();
 }
 
 - (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {

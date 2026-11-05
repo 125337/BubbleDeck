@@ -34,28 +34,11 @@ CGFloat BDFooter(UIViewController *vc, UIScrollView *scroll, CGFloat y);
 UIView *BDRowCard(UIViewController *vc, UIScrollView *scroll, CGFloat y,
                   NSString *title, SEL tapSel);
 
-// 气泡包卡片「内容」（0 原点、直角、透明底）：缩略图 + 标题 + 副标题 + 右侧徽章/箭头。
+// 气泡包卡片「内容」（0 原点、直角、卡片底色）：缩略图 + 标题 + 副标题 + 右侧徽章/箭头。
 // 注意：这里不画圆角——圆角统一由外层裁剪容器提供（TDBPackRowView），
 // 保证一行里只有一处圆角光栅化。badgeText 非空 → 显示该角标并替代箭头/使用中徽章。
-// 卡片底色（玻璃/兜底白）由外层安装，这里只做内容与布局。
 UIView *BDCardContentView(CGFloat w, NSString *title, NSString *subtitle,
                           UIImage *thumb, BOOL isActive, NSString *badgeText);
-
-// ── 分层液态玻璃（三级降级：iOS 26 原生 UIGlassEffect → 13–25 磨砂+描边 → 白卡兜底）──
-// 在 host（须已设圆角 + clipsToBounds）底部安装玻璃材质层。
-// 返回 YES = 材质可用（host 背景保持透明）；NO = 失败（调用方回填不透明白卡底色）。
-// iOS 26 走运行时探测的 UIGlassEffect（不编译期引用，SDK 版本不确定），全程 @try 守卫。
-BOOL BDInstallGlassMaterial(UIView *host);
-
-// 玻璃卡片壳：外投影 + 圆角裁剪玻璃容器（corner = 圆角半径，内容 addSubview 到返回视图）
-UIView *BDGlassCard(CGRect frame, CGFloat corner);
-
-// 下载按钮 tinted glass 底：磨砂 + 琥珀 #E8A33D overlay(α0.85) + 白描边，文字保持白色
-void BDStyleAmberGlassButton(UIButton *btn);
-
-// 页面底层中性纹理装饰层：白/黑径向 blob + 超大低透明度水印（纯明度无色相）。
-// 插在 host 最底层（页面背景之上、scroll 之下），不随列表滚动，给玻璃提供「可磨」的背景。
-void BDInstallGlassBackdrop(UIView *host);
 
 // ── 工具 ──
 NSString *BDFileSize(long long bytes);

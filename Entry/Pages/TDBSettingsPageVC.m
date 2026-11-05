@@ -35,7 +35,6 @@
 
 - (void)buildPage {
     for (UIView *sub in self.view.subviews) [sub removeFromSuperview];
-    BDInstallGlassBackdrop(self.view);   // 中性纹理装饰层：背景之上、scroll 之下，不随列表滚动
 
     CGFloat w = self.view.bounds.size.width;
     UIScrollView *scroll = BDNewScroll(self);
@@ -45,7 +44,9 @@
 
     // 日志开关卡
     {
-        UIView *card = BDGlassCard(CGRectMake(15, y, wIn, 46), 15);   // 分层玻璃：行卡
+        UIView *card = [[UIView alloc] initWithFrame:CGRectMake(15, y, wIn, 46)];
+        card.backgroundColor = BDCardBg();
+        card.layer.cornerRadius = 15;
 
         UILabel *lb = [[UILabel alloc] initWithFrame:CGRectMake(16, 0, wIn - 100, 46)];
         lb.font = [UIFont systemFontOfSize:15];
@@ -67,7 +68,9 @@
 
     // 关于卡
     {
-        UIView *card = BDGlassCard(CGRectMake(15, y, wIn, 64), 15);   // 分层玻璃：行卡
+        UIView *card = [[UIView alloc] initWithFrame:CGRectMake(15, y, wIn, 64)];
+        card.backgroundColor = BDCardBg();
+        card.layer.cornerRadius = 15;
 
         UILabel *lb = [[UILabel alloc] initWithFrame:CGRectMake(16, 11, wIn - 32, 20)];
         lb.font = [UIFont systemFontOfSize:15];
