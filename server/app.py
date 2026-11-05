@@ -15,6 +15,7 @@
 import os
 import json
 import time
+import re
 import sqlite3
 
 from fastapi import FastAPI, Request
@@ -86,9 +87,18 @@ def rate_hit(scope: str, ident: str, limit: int) -> bool:
     return ok
 
 def client_ip(request: Request) -> str:
-    # SCF/反代场景取转发头，兜底直连地址
+    # SCF/反代场景取转发头，兜底直连地址。nginx 把真实 IP 追加在 XFF 末尾 →
+    # 必须取最后一个值；取第一个等于信任客户端自带的伪造头，限频会被绕过。
     fwd = request.headers.get("X-Forwarded-For", "")
-    return (fwd.split(",")[0].strip() if fwd else "") or (request.client.host if request.client else "?")
+    return (fwd.split(",")[-1].strip() if fwd else "") or (request.client.host if request.client else "?")
+
+# 输入白名单：卡号 XXXX-XXXX-XXXX-XXXX（gencards 字母表，去易混字符）、
+# device = IDFV/UUID、wxid = 微信号安全字符集。
+# license 会被 card_path 直接拼成文件名，不设白名单 = 路径穿越（可读/写任意 *.json）；
+# device/wxid 进限频键与卡密 JSON，一并封死怪值。
+_LICENSE_RE = re.compile(r"^[A-HJ-NP-Z2-9]{4}(-[A-HJ-NP-Z2-9]{4}){3}$")
+_ID_RE      = re.compile(r"^[A-Za-z0-9-]{1,128}$")
+_WXID_RE    = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 # ────── 卡密文件（按卡一 JSON） ──────
 
@@ -118,8 +128,12 @@ async def activate(request: Request):
     body = await request.body()
     try:
         j = json.loads(body)
-        license_key, device, wxid = j["license"], j["device_id"], j["wxid"]
+        license_key = str(j["license"] or "").strip().upper()
+        device, wxid = str(j["device_id"] or "").strip(), str(j["wxid"] or "").strip()
     except Exception:
+        return resp(1004, "参数缺失")
+    # 白名单校验必须先于限频与文件操作（不合规请求不进 _RATE、不碰磁盘）
+    if not _LICENSE_RE.fullmatch(license_key) or not _ID_RE.fullmatch(device) or not _WXID_RE.fullmatch(wxid):
         return resp(1004, "参数缺失")
     if not rate_hit("activate", f"{device}|{client_ip(request)}", ACTIVATE_HOURLY):
         return resp(1007, "操作过于频繁，请一小时后再试")
@@ -145,9 +159,11 @@ async def packs(request: Request):
     body = await request.body()
     try:
         j = json.loads(body)
-        device, wxid = j["device_id"], j["wxid"]
+        device, wxid = str(j["device_id"] or "").strip(), str(j["wxid"] or "").strip()
     except Exception:
         return resp(1004, "参数缺失")
+    if not _ID_RE.fullmatch(device) or (wxid and not _WXID_RE.fullmatch(wxid)):
+        return resp(1004, "参数缺失")     # wxid 允许为空（客户端抓不到号时兜底报到），非空则必须合规
     if not rate_hit("packs", f"{device}|{client_ip(request)}", PACKS_HOURLY):
         return resp(429, "请求过于频繁，请稍后再试")
 

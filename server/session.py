@@ -14,9 +14,12 @@ import time
 import hmac
 import hashlib
 
-# 未配置时回落开发默认值（生产部署必须设置强随机值，见部署清单）
-ADMIN_SECRET = os.environ.get("BD_ADMIN_SECRET", "bd-admin-dev-secret")
-BIZ_SECRET   = os.environ.get("BD_BIZ_SECRET", "bd-biz-dev-secret")
+# 双 secret 必须由环境变量提供。fail-closed：未配置直接拒绝启动——
+# 宁可服务不可用，也不能带着可猜的默认密钥上线（等于后台裸奔）。
+ADMIN_SECRET = os.environ.get("BD_ADMIN_SECRET", "")
+BIZ_SECRET   = os.environ.get("BD_BIZ_SECRET", "")
+if not ADMIN_SECRET or not BIZ_SECRET:
+    raise RuntimeError("未配置 BD_ADMIN_SECRET / BD_BIZ_SECRET 环境变量，拒绝启动（见部署清单 §六.2）")
 
 SESSION_HOURS = 12
 
