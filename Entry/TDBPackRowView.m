@@ -37,9 +37,6 @@ static UIColor *BDCardPressedBg(void) {
 @interface TDBPackRowView () <UIGestureRecognizerDelegate>
 @property (nonatomic, strong) UIView *contentView;
 @property (nonatomic, strong) UIControl *deleteView;
-@property (nonatomic, copy) void (^onTap)(void);
-@property (nonatomic, copy) void (^onOpen)(void);
-@property (nonatomic, copy) void (^onDelete)(void);
 @property (nonatomic, assign) CGFloat offset;      // 当前平移量（负数 = 左滑）
 @property (nonatomic, assign) CGFloat panStart;
 @end
