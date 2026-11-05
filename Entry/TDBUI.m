@@ -72,6 +72,7 @@ CGFloat BDEmptyHint(UIViewController *vc, UIScrollView *scroll, CGFloat y, NSStr
     UIView *card = [[UIView alloc] initWithFrame:CGRectMake(15, y, w - 30, 84)];
     card.backgroundColor = BDCardBg();
     card.layer.cornerRadius = 15;
+    if (@available(iOS 13.0, *)) card.layer.cornerCurve = kCACornerCurveContinuous;
     card.layer.borderWidth = 1;
     card.layer.borderColor = [BDSecondaryText() colorWithAlphaComponent:0.25].CGColor;
     UILabel *lb = [[UILabel alloc] initWithFrame:CGRectMake(16, 0, w - 62, 84)];
@@ -103,6 +104,7 @@ UIView *BDRowCard(UIViewController *vc, UIScrollView *scroll, CGFloat y,
     UIView *card = [[UIView alloc] initWithFrame:CGRectMake(15, y, w - 30, 46)];
     card.backgroundColor = BDCardBg();
     card.layer.cornerRadius = 15;
+    if (@available(iOS 13.0, *)) card.layer.cornerCurve = kCACornerCurveContinuous;
 
     UILabel *lb = [[UILabel alloc] initWithFrame:CGRectMake(16, 0, w - 100, 46)];
     lb.font = [UIFont systemFontOfSize:15];
@@ -124,21 +126,15 @@ UIView *BDRowCard(UIViewController *vc, UIScrollView *scroll, CGFloat y,
     return card;
 }
 
-// ────── 气泡包卡片 ──────
-// packName = nil 表示「微信默认」卡；isActive 决定右侧徽章样式；
-// badgeText 非空 = 不可用状态（灰显 + 灰色角标）
+// ────── 气泡包卡片内容 ──────
+// 只做内容与布局，不画圆角：外层圆角由 TDBPackRowView 的裁剪容器提供
+// badgeText 非空 = 不可用状态（灰色角标），替代「使用中」徽章/箭头
 
-UIView *BDMakeCard(CGFloat y, CGFloat w,
-                   NSString *packName, NSString *title,
-                   NSString *subtitle, UIImage *thumb, BOOL isActive, NSString *badgeText) {
-    UIView *card = [[UIView alloc] initWithFrame:CGRectMake(15, y, w - 30, 76)];
+UIView *BDCardContentView(CGFloat w, NSString *title, NSString *subtitle,
+                          UIImage *thumb, BOOL isActive, NSString *badgeText) {
+    UIView *card = [[UIView alloc] initWithFrame:CGRectMake(0, 0, w, 76)];
     card.backgroundColor = BDCardBg();
-    card.layer.cornerRadius = 15;
-    if (@available(iOS 13.0, *)) card.layer.cornerCurve = kCACornerCurveContinuous;
-    if (@available(iOS 13.0, *)) {
-        if (isActive && !badgeText) card.layer.borderWidth = 1.5, card.layer.borderColor = BDTint().CGColor;
-    }
-    // 灰显只靠角标：卡片必须保持不透明——垫在底下的红色删除按钮会透过半透明卡片露出来
+    // 直角：不设 cornerRadius。卡片必须保持不透明（灰显只靠角标）
 
     // 缩略图：48pt 圆角；无图用包名首字占位
     UIView *thumbView;
@@ -161,25 +157,28 @@ UIView *BDMakeCard(CGFloat y, CGFloat w,
         thumbView = lb;
     }
     thumbView.layer.cornerRadius = 12;
+    if (@available(iOS 13.0, *)) thumbView.layer.cornerCurve = kCACornerCurveContinuous;
     thumbView.clipsToBounds = YES;
     [card addSubview:thumbView];
 
     CGFloat textX = tx + 48 + 14;
-    CGFloat textW = w - 30 - textX - 70; // 右侧留徽章/箭头区
+    CGFloat textW = w - textX - 70; // 右侧留徽章/箭头区
 
-    UILabel *nameLb = [[UILabel alloc] initWithFrame:CGRectMake(textX, 15, textW, 22)];
+    // 文字块垂直居中：17 + 22 + 4 + 16 = 59，块中心 38 = 卡片中线
+    UILabel *nameLb = [[UILabel alloc] initWithFrame:CGRectMake(textX, 17, textW, 22)];
     nameLb.font = [UIFont systemFontOfSize:16 weight:UIFontWeightSemibold];
     nameLb.text = title;
     [card addSubview:nameLb];
 
-    UILabel *subLb = [[UILabel alloc] initWithFrame:CGRectMake(textX, 41, textW, 18)];
-    subLb.font = [UIFont systemFontOfSize:12];
+    UILabel *subLb = [[UILabel alloc] initWithFrame:CGRectMake(textX, 43, textW, 16)];
+    subLb.font = [UIFont systemFontOfSize:13];
     subLb.textColor = BDSecondaryText();
     subLb.text = subtitle;
     [card addSubview:subLb];
 
+    CGFloat badgeX = w - 14 - 58;   // 右内边距 14，与左边距对称
     if (badgeText.length) {
-        UILabel *badge = [[UILabel alloc] initWithFrame:CGRectMake(w - 30 - 66, 28, 58, 22)];
+        UILabel *badge = [[UILabel alloc] initWithFrame:CGRectMake(badgeX, 27, 58, 22)];
         badge.backgroundColor = BDChipBg();
         badge.textColor = BDSecondaryText();
         badge.font = [UIFont systemFontOfSize:11 weight:UIFontWeightMedium];
@@ -189,7 +188,7 @@ UIView *BDMakeCard(CGFloat y, CGFloat w,
         badge.text = badgeText;
         [card addSubview:badge];
     } else if (isActive) {
-        UILabel *badge = [[UILabel alloc] initWithFrame:CGRectMake(w - 30 - 66, 28, 58, 22)];
+        UILabel *badge = [[UILabel alloc] initWithFrame:CGRectMake(badgeX, 27, 58, 22)];
         badge.backgroundColor = BDTint();
         badge.textColor = [UIColor whiteColor];
         badge.font = [UIFont systemFontOfSize:11 weight:UIFontWeightMedium];
@@ -199,16 +198,13 @@ UIView *BDMakeCard(CGFloat y, CGFloat w,
         badge.text = @"使用中";
         [card addSubview:badge];
     } else {
-        UILabel *chevron = [[UILabel alloc] initWithFrame:CGRectMake(w - 30 - 34, 0, 20, 76)];
+        UILabel *chevron = [[UILabel alloc] initWithFrame:CGRectMake(w - 14 - 20, 0, 20, 76)];
         chevron.text = @"›";
         chevron.font = [UIFont systemFontOfSize:20];
         chevron.textColor = BDSecondaryText();
         chevron.textAlignment = NSTextAlignmentCenter;
         [card addSubview:chevron];
     }
-
-    // 点按目标：包名挂 associated object（nil = 微信默认卡），手势由调用方挂
-    objc_setAssociatedObject(card, "pack", packName, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
     return card;
 }

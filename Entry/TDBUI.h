@@ -34,11 +34,11 @@ CGFloat BDFooter(UIViewController *vc, UIScrollView *scroll, CGFloat y);
 UIView *BDRowCard(UIViewController *vc, UIScrollView *scroll, CGFloat y,
                   NSString *title, SEL tapSel);
 
-// 气泡包卡片（packName = nil 表示「微信默认」卡；isActive 决定右侧徽章样式）。
-// badgeText 非空 → 卡片灰显并显示该角标（如「已封禁」），替代箭头/使用中徽章。
-// 点按手势由调用方挂；packName 挂在卡片 associated object "pack" 上。
-UIView *BDMakeCard(CGFloat y, CGFloat w, NSString *packName, NSString *title,
-                   NSString *subtitle, UIImage *thumb, BOOL isActive, NSString *badgeText);
+// 气泡包卡片「内容」（0 原点、直角、卡片底色）：缩略图 + 标题 + 副标题 + 右侧徽章/箭头。
+// 注意：这里不画圆角——圆角统一由外层裁剪容器提供（TDBPackRowView），
+// 保证一行里只有一处圆角光栅化。badgeText 非空 → 显示该角标并替代箭头/使用中徽章。
+UIView *BDCardContentView(CGFloat w, NSString *title, NSString *subtitle,
+                          UIImage *thumb, BOOL isActive, NSString *badgeText);
 
 // ── 工具 ──
 NSString *BDFileSize(long long bytes);
