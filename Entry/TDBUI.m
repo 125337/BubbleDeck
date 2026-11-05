@@ -7,13 +7,25 @@
 
 #import "TDBUI.h"
 #import <objc/runtime.h>
+#import <objc/message.h>
 
 // ────── 配色 ──────
 
-// 页面背景：iOS 分组列表的浅灰底，让白色卡片有轮廓
+// 微信页面底色取样（Mio/WCR 同款：现场实例化微信 WCTableViewManager，
+// 读它自建 tableView 的背景色——色值由微信主题体系写，深浅色跟随微信而非 iOS 系统）。
+// 不缓存：微信主题运行时可切，每次现取。objc_msgSend 对 nil 全程安全。
 UIColor *BDPageBg(void) {
-    if (@available(iOS 13.0, *)) return [UIColor systemGroupedBackgroundColor];
-    return [UIColor colorWithRed:0.949 green:0.949 blue:0.969 alpha:1.0];
+    Class mgrCls = objc_getClass("WCTableViewManager");
+    SEL ifs = NSSelectorFromString(@"initWithFrame:style:");
+    id alloced = ((id (*)(id, SEL))objc_msgSend)((id)mgrCls, NSSelectorFromString(@"alloc"));
+    id mgr = [mgrCls instancesRespondToSelector:ifs]
+        ? ((id (*)(id, SEL, CGRect, long))objc_msgSend)(alloced, ifs, CGRectZero, (long)UITableViewStyleGrouped)
+        : ((id (*)(id, SEL))objc_msgSend)(alloced, NSSelectorFromString(@"init"));
+    SEL tvg = NSSelectorFromString(@"tableView");
+    id tv = (mgr && [mgr respondsToSelector:tvg]) ? ((id (*)(id, SEL))objc_msgSend)(mgr, tvg) : nil;
+    return [tv isKindOfClass:[UITableView class]]
+        ? ((id (*)(id, SEL))objc_msgSend)(tv, NSSelectorFromString(@"backgroundColor"))
+        : nil;
 }
 
 UIColor *BDCardBg(void) {
