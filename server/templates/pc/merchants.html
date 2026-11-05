@@ -1,0 +1,112 @@
+{% extends "pc/base.html" %}
+{% block sub %}<p>B 端账号。商家只能看到自己名下的包与卡密，数据互相隔离。</p>{% endblock %}
+{% block content %}
+<section class="panel">
+  <div class="pbody" style="display:flex;gap:14px;flex-wrap:wrap;align-items:flex-end">
+    <div class="fld" style="width:200px">
+      <label for="m-username">登录账号</label>
+      <input id="m-username" placeholder="字母/数字/下划线，3-24 位" style="width:100%">
+    </div>
+    <div class="fld" style="width:200px">
+      <label for="m-shop">店名（选填）</label>
+      <input id="m-shop" placeholder="如：某宝旗舰店" style="width:100%">
+    </div>
+    <button type="button" class="btn" id="m-create">创建商家</button>
+  </div>
+  <div class="pw-panel" id="pw-panel" hidden>
+    <p><strong id="pw-title"></strong></p>
+    <p class="mono cc" id="pw-value" style="font-size:16px"></p>
+    <p class="dim" style="font-size:12px">初始密码仅显示这一次，请立即复制发给商家。商家端入口：<span class="mono">https://qb.xhhan.xyz/biz</span></p>
+  </div>
+</section>
+
+<section class="panel">
+  <table class="tbl">
+    <thead>
+      <tr><th>账号</th><th>店名</th><th>状态</th><th>创建时间</th><th class="r">操作</th></tr>
+    </thead>
+    <tbody id="list"><tr><td colspan="5" style="padding:24px"><div class="empty">加载中…</div></td></tr></tbody>
+  </table>
+</section>
+{% endblock %}
+
+{% block script %}
+<script src="/admin/static/admin.js"></script>
+<script>
+  var ROWS = [];
+  function $(id) { return document.getElementById(id); }
+  function esc(s) { return BD.esc(s); }
+
+  function render() {
+    var h = '';
+    for (var i = 0; i < ROWS.length; i++) {
+      var r = ROWS[i];
+      h += '<tr>'
+        + '<td class="mono">' + esc(r.username) + '</td>'
+        + '<td>' + (r.shop ? esc(r.shop) : '<span class="dim">—</span>') + '</td>'
+        + '<td><span class="badge ' + (r.on ? 'b-on' : 'b-off') + '">' + (r.on ? '启用' : '停用') + '</span></td>'
+        + '<td class="dim">' + esc(r.created) + '</td>'
+        + '<td class="r"><div style="display:inline-flex;gap:6px">'
+        + '<button type="button" class="ghost" data-act="reset" data-id="' + r.id + '">重置密码</button>'
+        + '<button type="button" class="ghost' + (r.on ? '' : ' warn') + '" data-act="toggle" data-id="' + r.id + '" data-on="' + r.on + '">' + (r.on ? '停用' : '启用') + '</button>'
+        + '</div></td></tr>';
+    }
+    $('list').innerHTML = h || '<tr><td colspan="5" style="padding:24px"><div class="empty">还没有商家，先在上方创建</div></td></tr>';
+  }
+
+  function load() {
+    BD.get('/admin/api/merchants').then(function (j) {
+      if (j.code !== 0) { BD.toast('⚠ ' + j.msg); return; }
+      ROWS = j.data.rows; render();
+    });
+  }
+
+  function showPw(title, pw) {
+    $('pw-panel').hidden = false;
+    $('pw-title').textContent = title;
+    $('pw-value').textContent = pw;
+    $('pw-value').setAttribute('data-copy', pw);
+    $('pw-panel').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+
+  $('m-create').addEventListener('click', function () {
+    var btn = this;
+    btn.disabled = true;
+    BD.api('/admin/api/merchants/create', { username: $('m-username').value.trim(), shop: $('m-shop').value.trim() }).then(function (j) {
+      btn.disabled = false;
+      if (j.code !== 0) { BD.toast('⚠ ' + j.msg); return; }
+      BD.toast(j.msg);
+      showPw('商家 ' + j.data.username + ' 的初始密码', j.data.password);
+      $('m-username').value = ''; $('m-shop').value = '';
+      load();
+    });
+  });
+
+  $('list').addEventListener('click', function (e) {
+    var b = e.target.closest('[data-act]');
+    if (!b) return;
+    var id = b.getAttribute('data-id');
+    if (b.getAttribute('data-act') === 'reset') {
+      if (!confirm('重置该商家的登录密码？')) return;
+      BD.api('/admin/api/merchants/reset', { id: id }).then(function (j) {
+        if (j.code !== 0) { BD.toast('⚠ ' + j.msg); return; }
+        showPw('新密码', j.data.password);
+        BD.toast(j.msg);
+      });
+    } else {
+      var to = b.getAttribute('data-on') === 'true' ? 'off' : 'on';
+      BD.api('/admin/api/merchants/state', { id: id, state: to }).then(function (j) {
+        if (j.code !== 0) { BD.toast('⚠ ' + j.msg); return; }
+        BD.toast(j.msg); load();
+      });
+    }
+  });
+
+  /* 绑定初始密码点击复制（面板内容动态更新，用委托） */
+  $('pw-panel').addEventListener('click', function (e) {
+    if (e.target.id === 'pw-value') BD.copy(e.target.getAttribute('data-copy'), e.target);
+  });
+
+  load();
+</script>
+{% endblock %}

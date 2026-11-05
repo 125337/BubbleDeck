@@ -1,0 +1,175 @@
+{% extends "biz/m/base.html" %}
+{% block content %}
+
+<section class="sect" id="newpanel" hidden>
+  <h2>本次生成<span id="newsub" style="font-weight:400"></span></h2>
+  <div class="bcard">
+    <div class="generated"><div class="list" id="newList"></div></div>
+    <div class="ops"><button type="button" id="copyAll">复制全部</button></div>
+  </div>
+</section>
+
+<section class="sect">
+  <h2>生成卡密</h2>
+  <div class="bcard">
+    <form id="genform" method="post" action="/biz/api/cards/generate" enctype="multipart/form-data" class="fgrid">
+      <div class="fld"><label for="gen-n">数量（单次最多 200）</label>
+        <input id="gen-n" type="number" name="n" min="1" max="200" value="10" inputmode="numeric"></div>
+      <div class="fld"><label for="gen-pack">气泡包（一码对应一个包）</label>
+        <select id="gen-pack" name="pack" required>
+          {% for p in packs_on %}<option value="{{ p }}">{{ p }}</option>{% endfor %}
+        </select></div>
+      <button type="submit" class="btn wfull" id="genbtn">生成</button>
+    </form>
+  </div>
+</section>
+
+<section class="sect">
+  <h2>卡密列表 · <span id="listsub">加载中…</span></h2>
+  <div class="filters" id="fpills">
+    <button type="button" data-v="">全部</button>
+    {% for k, v in state_options.items() %}<button type="button" data-v="{{ k }}">{{ v }}</button>{% endfor %}
+  </div>
+  <form class="searchform" onsubmit="return false">
+    <input type="search" id="fq" placeholder="卡密 / wxid / 设备 / 包名" value="{{ q }}" aria-label="搜索">
+  </form>
+  <div id="list" class="stack" style="margin-top:12px">
+    <div class="empty">加载中…</div>
+  </div>
+</section>
+
+<div class="statusrow">
+  <span class="row">1 卡 = 1 设备 · 换机重新发卡 · 封禁即时生效</span>
+</div>
+{% endblock %}
+{% block script %}
+<script src="/admin/static/admin.js"></script>
+<script>
+(function () {
+  var ROWS = [], F = { state: '', q: '' };
+  function $(id) { return document.getElementById(id); }
+
+  try {
+    var u0 = new URL(location.href);
+    F.state = u0.searchParams.get('state') || '';
+    F.q = (u0.searchParams.get('q') || '').trim();
+  } catch (e) {}
+  $('fq').value = F.q;
+  paintPills();
+
+  function paintPills() {
+    document.querySelectorAll('#fpills button').forEach(function (b) {
+      b.classList.toggle('on', b.getAttribute('data-v') === F.state);
+    });
+  }
+
+  function filtered() {
+    var q = F.q.toLowerCase();
+    return ROWS.filter(function (r) {
+      if (F.state && r.state !== F.state) return false;
+      if (q && (r.license + ' ' + r.wxid + ' ' + r.device + ' ' + r.pack).toLowerCase().indexOf(q) < 0) return false;
+      return true;
+    });
+  }
+
+  function render() {
+    var rows = filtered(), h = '';
+    $('listsub').textContent = '共 ' + rows.length + ' 条';
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i];
+      h += '<div class="bcard">'
+        + '<div class="top"><span class="no cc" data-copy="' + BD.esc(r.license) + '">' + BD.esc(r.license) + '</span>'
+        + '<span class="badge b-' + r.state + '">' + BD.esc(r.state_cn) + '</span></div>'
+        + '<div class="kv">'
+        + '<em>气泡包</em><span>' + BD.esc(r.pack) + '</span>'
+        + '<em>微信</em><span>' + (r.wxid !== '-' ? BD.esc(r.wxid) : '—') + '</span>'
+        + '<em>设备</em><span class="mono">' + (r.device !== '-' ? BD.esc(r.device) : '—') + '</span>'
+        + '<em>激活于</em><span>' + BD.esc(r.at) + '</span>'
+        + '</div>'
+        + '<div class="ops">'
+        + (r.can_revoke ? '<button type="button" data-act="revoke" data-license="' + BD.esc(r.license) + '">封禁</button>' : '')
+        + '<button type="button" class="danger" data-act="del" data-license="' + BD.esc(r.license) + '">删除</button>'
+        + '</div></div>';
+    }
+    $('list').innerHTML = h || '<div class="empty">没有匹配的卡密</div>';
+  }
+
+  function syncURL() {
+    try {
+      var u = new URL(location.href);
+      F.state ? u.searchParams.set('state', F.state) : u.searchParams.delete('state');
+      F.q ? u.searchParams.set('q', F.q) : u.searchParams.delete('q');
+      history.replaceState(null, '', u.pathname + (u.search || ''));
+    } catch (e) {}
+  }
+
+  function load() {
+    BD.get('/biz/api/cards').then(function (j) {
+      if (j.code !== 0) { BD.toast('⚠ ' + j.msg); return; }
+      ROWS = j.data.rows; render();
+    });
+  }
+
+  $('fpills').addEventListener('click', function (e) {
+    var b = e.target.closest('button[data-v]');
+    if (!b) return;
+    F.state = b.getAttribute('data-v');
+    paintPills(); render(); syncURL();
+  });
+
+  var tmr = null;
+  $('fq').addEventListener('input', function () {
+    clearTimeout(tmr);
+    var v = this.value;
+    tmr = setTimeout(function () { F.q = v.trim(); render(); syncURL(); }, 200);
+  });
+
+  /* 列表操作：点卡号复制 / 封禁 / 删除（事件委托） */
+  $('list').addEventListener('click', function (e) {
+    var c = e.target.closest('.cc');
+    if (c) { BD.copy(c.getAttribute('data-copy'), c); return; }
+    var b = e.target.closest('[data-act]');
+    if (!b) return;
+    var lic = b.getAttribute('data-license'), r = null;
+    for (var i = 0; i < ROWS.length; i++) if (ROWS[i].license === lic) r = ROWS[i];
+    if (!r) return;
+    if (b.getAttribute('data-act') === 'revoke') {
+      if (!confirm('确认封禁 ' + lic + '？该用户下次打开微信，「' + r.pack + '」即失效')) return;
+      BD.api('/biz/api/cards/state', { license: lic }).then(function (j) {
+        if (j.code !== 0) { BD.toast('⚠ ' + j.msg); return; }
+        r.state = 'revoked'; r.state_cn = '已封禁'; r.can_revoke = false;
+        render(); BD.toast(j.msg);
+      });
+    } else {
+      var warn = r.state === 'active' ? '\n\n该卡已激活，删除后 ' + r.wxid + ' 的授权随即失效。' : '';
+      if (!confirm('确认删除 ' + lic + '？\n\n此操作立即删除卡密文件，不可恢复！' + warn)) return;
+      BD.api('/biz/api/cards/delete', { license: lic }).then(function (j) {
+        if (j.code !== 0) { BD.toast('⚠ ' + j.msg); return; }
+        ROWS.splice(ROWS.indexOf(r), 1);
+        render(); BD.toast(j.msg);
+      });
+    }
+  });
+
+  /* 生成卡密（异步） */
+  $('genform').addEventListener('submit', function (e) {
+    e.preventDefault();
+    var btn = $('genbtn');
+    btn.disabled = true; btn.textContent = '生成中…';
+    BD.api('/biz/api/cards/generate', { n: $('gen-n').value, pack: $('gen-pack').value }).then(function (j) {
+      btn.disabled = false; btn.textContent = '生成';
+      if (j.code !== 0) { BD.toast('⚠ ' + j.msg); return; }
+      $('newpanel').hidden = false;
+      $('newsub').textContent = ' · ' + j.data.cards.length + ' 张，请立即复制保存';
+      $('newList').innerHTML = j.data.cards.map(function (c) { return '<span>' + BD.esc(c) + '</span>'; }).join('<br>');
+      $('copyAll').onclick = function () { BD.copy(j.data.cards.join('\n'), this); };
+      $('newpanel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+      BD.toast(j.msg);
+      load();
+    });
+  });
+
+  load();
+})();
+</script>
+{% endblock %}

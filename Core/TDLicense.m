@@ -2,10 +2,9 @@
 //  TDLicense.m
 //  BubbleDeck
 //
-//  V2 授权模型（相比 V1 净减 ~100 行：无 token 状态机/自愈/兜底计时）。
-//  Keychain 四项：cachedWxid / entitlements（清单 JSON）/ lastSync（报到时间戳）/
-//  device（IDFV 异常兜底 UUID）。V1 遗留字段（token/card/lastVerify）启动清理一次。
-//  清单读取全部走内存缓存——闸门在微信取图热路径上，禁止每次 Keychain IO。
+//  V4 现取形态：清单（含包密钥）仅内存持有，绝不落盘——Keychain 旧字段启动清理一次。
+//  Keychain 只剩两项：cachedWxid（报到兜底）/ device（IDFV 异常兜底 UUID）。
+//  断网：本进程内沿用内存清单；重启后必须联网现取 → 封卡/换 key 即时生效。
 //
 
 #import "TDLicense.h"
@@ -21,14 +20,12 @@ NSNotificationName const TDLicenseStateChangedNotification = @"BubbleDeckLicense
 
 static NSString * const kKCService = @"com.bubbledeck.auth";
 static NSString * const kKCAccountWxid   = @"cachedWxid";
-static NSString * const kKCAccountEnts   = @"entitlements";
-static NSString * const kKCAccountSync   = @"lastSync";
 static NSString * const kKCAccountDevice = @"device";
-// V1 遗留字段（启动清理一次）
+// V3 遗留字段（entitlements 清单含包密钥，V4 起绝不落盘；启动清理一次）
 static NSArray<NSString *> *kKCLegacyAccounts(void) {
     static NSArray *a;
     static dispatch_once_t once;
-    dispatch_once(&once, ^{ a = @[@"token", @"card", @"lastVerify"]; });
+    dispatch_once(&once, ^{ a = @[@"token", @"card", @"lastVerify", @"entitlements", @"lastSync"]; });
     return a;
 }
 
@@ -54,7 +51,7 @@ static NSString *KCGet(NSString *account) {
 static BOOL KCSet(NSString *account, NSString *value) {
     if (!value.length) { KCDelete(account); return YES; }
     NSDictionary *attrs = @{ (__bridge id)kSecValueData     : [value dataUsingEncoding:NSUTF8StringEncoding],
-                             // ThisDeviceOnly：含包密钥的清单不随 iCloud/备份流转（V3）
+                             // ThisDeviceOnly：wxid/设备标识不随 iCloud/备份流转
                              (__bridge id)kSecAttrAccessible: (__bridge id)kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly };
     OSStatus st = SecItemUpdate((__bridge CFDictionaryRef)KCQuery(account),
                                 (__bridge CFDictionaryRef)attrs);
@@ -77,41 +74,24 @@ static void BDCleanLegacy(void) {
     for (NSString *a in kKCLegacyAccounts()) KCDelete(a);
 }
 
-// ────── 内存缓存（热路径安全） ──────
+// ────── 内存缓存（热路径安全；清单含 key，仅进程内存，绝不落盘） ──────
 
-static NSArray<NSDictionary *> *s_ents = nil;   // 解析后的 packs 清单
+static NSArray<NSDictionary *> *s_ents = nil;   // 解析后的 packs 清单（含包密钥）
 static BOOL s_entsLoaded = NO;
-static double s_lastSync = -1;                  // -1 = 未从 Keychain 加载
+static double s_lastSync = 0;                   // 本进程上次报到成功时间戳；0 = 从未
 static BOOL s_syncing = NO;
-
-static double BDLastSync(void) {
-    if (s_lastSync < 0) s_lastSync = [KCGet(kKCAccountSync) doubleValue];
-    return s_lastSync;
-}
 
 static void BDLoadEnts(void) {
     if (s_entsLoaded) return;
     s_entsLoaded = YES;
-    BDCleanLegacy();
-    NSString *json = KCGet(kKCAccountEnts);
-    if (!json.length) return;
-    NSData *d = [json dataUsingEncoding:NSUTF8StringEncoding];
-    id obj = d ? [NSJSONSerialization JSONObjectWithData:d options:0 error:nil] : nil;
-    if ([obj isKindOfClass:[NSArray class]]) s_ents = obj;
+    BDCleanLegacy();                            // V3 遗留的落盘清单/时间戳清理一次
 }
 
 static void BDSaveEnts(NSArray *packs) {
     s_ents = packs;
     s_entsLoaded = YES;
-    NSData *d = [NSJSONSerialization dataWithJSONObject:packs options:0 error:nil];
-    KCSet(kKCAccountEnts,
-          d ? [[NSString alloc] initWithData:d encoding:NSUTF8StringEncoding] : nil);
     s_lastSync = [[NSDate date] timeIntervalSince1970];
-    KCSet(kKCAccountSync, [NSString stringWithFormat:@"%.0f", s_lastSync]);
 }
-
-// 离线兜底：上次报到距今 7 天内有效
-static const NSTimeInterval kCacheSeconds = 7 * 86400;
 
 // ────── 设备信息 ──────
 
@@ -253,8 +233,8 @@ static BOOL BDSyncNow(void) {
 }
 
 + (BOOL)entitlementsExpired {
-    double last = BDLastSync();
-    return !(last > 0 && [[NSDate date] timeIntervalSince1970] - last < kCacheSeconds);
+    BDLoadEnts();
+    return s_lastSync <= 0;     // 本进程从未报到成功（现取形态：重启后必须联网现取）
 }
 
 + (BOOL)isOwnedPack:(NSString *)name {

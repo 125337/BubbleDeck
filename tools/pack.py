@@ -73,6 +73,35 @@ def gen_key() -> str:
     return base64.b64encode(secrets.token_bytes(32)).decode("ascii")
 
 
+def repack_version(blob: bytes, old_name: str, old_ver: str,
+                   new_ver: str, key_b64: str) -> bytes:
+    """BDP2 重签：解密 → 改写内层 info.json 的 version → 重 zip → 同一密钥按新版本 AAD 重加密。
+    容器头不含明文包名/版本，调用方必须提供打包时的 name/old_ver 以构造解密 AAD。
+    仅支持 BDP2 容器；解密失败（InvalidTag）= 密钥或 AAD 不匹配。"""
+    if blob[:4] != MAGIC:
+        raise ValueError("不是 BDP2 容器")
+    key32 = base64.b64decode(key_b64)
+    if len(key32) != 32:
+        raise ValueError("密钥长度错误")
+    old_aad = f"bdpack2|{old_name}|{old_ver}".encode("utf-8")
+    zip_data = AESGCM(key32).decrypt(blob[5:17], blob[17:], old_aad)
+    with zipfile.ZipFile(io.BytesIO(zip_data)) as zf:
+        entries = {i.filename: zf.read(i.filename) for i in zf.infolist()}
+    if "info.json" not in entries:
+        raise ValueError("容器内缺少 info.json")
+    info = json.loads(entries["info.json"].decode("utf-8"))
+    info["version"] = new_ver
+    entries["info.json"] = json.dumps(info, ensure_ascii=False).encode("utf-8")
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for f in sorted(entries):
+            zf.writestr(f, entries[f])
+    new_aad = f"bdpack2|{old_name}|{new_ver}".encode("utf-8")
+    iv = secrets.token_bytes(12)
+    ct = AESGCM(key32).encrypt(iv, buf.getvalue(), new_aad)
+    return MAGIC + bytes([VERSION]) + iv + ct
+
+
 def build_one(pack_dir: str, out: str, key_b64: str):
     name, version = read_name_version(pack_dir)
     blob = build_bdpack(pack_dir, base64.b64decode(key_b64), name, version)

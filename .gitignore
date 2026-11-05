@@ -10,3 +10,11 @@ packs/
 *~
 temp_*
 tmp_*
+
+# 服务器运行态/生产数据（卡密、包文件、密钥库不入仓）
+server/venv/
+server/licenses/
+server/packs_files/
+server/bd.db.bak*
+__pycache__/
+*.pyc

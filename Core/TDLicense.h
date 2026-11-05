@@ -2,11 +2,11 @@
 //  TDLicense.h
 //  BubbleDeck
 //
-//  V2 授权模型：插件免费壳，一包一码，wxid 绑定（契约见 docs/授权系统方案.md）。
+//  V4 现取形态：key 不落盘，每次冷启动/进商店页现取（POST /packs），仅内存持有。
 //    激活  = 输码入账（activate），码的使命结束，客户端不存码
-//    报到  = 每次启动 POST /packs，服务器下发 owned 清单 = 唯一真话来源
-//    兜底  = 清单缓存 7 天，断网沿用；超期在线包全禁用（本地导入包不受限）
-//  Keychain 只存 wxid 缓存 + 清单缓存 + 报到时间戳，敏感信息趋零。
+//    报到  = 启动/商店页 POST /packs，服务器下发 owned 清单（含 key）= 唯一真话来源
+//    兜底  = 无。断网 = 本进程内沿用内存清单；重启后必须联网现取（封卡/换 key 即时生效）
+//  Keychain 只存 wxid 缓存 + 设备兜底 UUID；清单与 key 绝不落盘（砸壳/备份只有密文）。
 //
 
 #import <Foundation/Foundation.h>
@@ -28,12 +28,12 @@ FOUNDATION_EXPORT NSNotificationName const TDLicenseStateChangedNotification;
 + (void)activateLicense:(NSString *)license
              completion:(void (^)(BOOL ok, NSString *message))completion;
 
-// ── 清单缓存读取（全部内存缓存，闸门在取图热路径上，禁止 Keychain IO） ──
+// ── 清单读取（仅内存，闸门在取图热路径上；本进程未报到成功 = 全禁） ──
 
-/// 缓存的 /packs 清单（结构同服务器 data.packs；从未报到成功返回 nil）
+/// 本进程内缓存的 /packs 清单（结构同服务器 data.packs；未报到成功返回 nil）
 + (nullable NSArray<NSDictionary *> *)entitlements;
 
-/// 上次报到距今是否超 7 天（从未报到成功也算超期）
+/// 本进程是否从未报到成功（未联网现取 → 在线包全禁用）
 + (BOOL)entitlementsExpired;
 
 /// 在线包闸门：清单未超期 且 该包 owned=YES 才放行

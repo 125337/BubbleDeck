@@ -1,0 +1,192 @@
+{% extends "pc/base.html" %}
+{% block sub %}<p>生成、检索与封禁卡密 · 卡号已去除易混字符 I / L / O / 0 / 1</p>{% endblock %}
+{% block content %}
+<div class="stack">
+
+<section class="panel" id="newpanel" hidden>
+  <div class="phead2">
+    <h2>本次生成<span class="sub" id="newsub"></span></h2>
+    <button type="button" class="btn ghost sm" id="copyAll">复制全部</button>
+  </div>
+  <div class="pbody">
+    <div class="generated"><div class="list" id="newList"></div></div>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="phead2"><h2>生成卡密</h2></div>
+  <div class="pbody">
+    <form id="genform" method="post" action="/admin/api/cards/generate" enctype="multipart/form-data" class="inline">
+      <div class="fld" style="width:110px">
+        <label for="gen-n">数量</label>
+        <input id="gen-n" type="number" name="n" min="1" max="200" value="10">
+      </div>
+      <div class="fld" style="width:200px">
+        <label for="gen-pack">气泡包</label>
+        <select id="gen-pack" name="pack" required>
+          {% for p in packs_on %}<option value="{{ p }}">{{ p }}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="fld" style="width:170px">
+        <label for="gen-owner">归属商家</label>
+        <select id="gen-owner" name="owner">
+          <option value="">直营（无归属）</option>
+          {% for mo in merchants %}<option value="{{ mo.id }}">{{ mo.name }}</option>{% endfor %}
+        </select>
+      </div>
+      <button type="submit" class="btn" id="genbtn" style="margin-bottom:1px">生成</button>
+      <span class="hint">单次最多 200 张 · 一码对应一个包</span>
+    </form>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="phead2">
+    <h2>卡密列表<span class="sub" id="listsub">加载中…</span></h2>
+    <form class="toolbar" id="filters" onsubmit="return false">
+      <select id="fstate" aria-label="状态筛选">
+        <option value="">全部状态</option>
+        {% for k, v in state_options.items() %}<option value="{{ k }}">{{ v }}</option>{% endfor %}
+      </select>
+      <select id="fowner" aria-label="归属筛选">
+        <option value="">全部归属</option>
+        <option value="__none__">直营（无归属）</option>
+        {% for mo in merchants %}<option value="{{ mo.id }}">{{ mo.name }}</option>{% endfor %}
+      </select>
+      <input type="search" id="fq" placeholder="卡密 / wxid / 设备 / 包名" value="{{ q }}" style="width:190px" aria-label="搜索">
+    </form>
+  </div>
+  <table class="tbl">
+    <thead>
+      <tr><th>卡密</th><th>气泡包</th><th>状态</th><th>归属</th><th>设备</th><th>微信 ID</th><th class="r">激活时间</th><th class="r">操作</th></tr>
+    </thead>
+    <tbody id="list"><tr><td colspan="8" style="padding:24px"><div class="empty">加载中…</div></td></tr></tbody>
+  </table>
+</section>
+
+</div>
+{% endblock %}
+{% block script %}
+<script src="/admin/static/admin.js"></script>
+<script>
+(function () {
+  var ROWS = [], F = { state: '', q: '', owner: '' };
+  function $(id) { return document.getElementById(id); }
+
+  /* 初始筛选从 URL 读取（深链可用）；此后筛选/操作不再整页跳转 */
+  try {
+    var u0 = new URL(location.href);
+    F.state = u0.searchParams.get('state') || '';
+    F.q = (u0.searchParams.get('q') || '').trim();
+    F.owner = u0.searchParams.get('owner') || '';
+  } catch (e) {}
+  $('fstate').value = F.state; $('fq').value = F.q; $('fowner').value = F.owner;
+
+  function filtered() {
+    var q = F.q.toLowerCase();
+    return ROWS.filter(function (r) {
+      if (F.state && r.state !== F.state) return false;
+      if (F.owner === '__none__' && r.owner) return false;
+      if (F.owner && F.owner !== '__none__' && r.owner !== F.owner) return false;
+      if (q && (r.license + ' ' + r.wxid + ' ' + r.device + ' ' + r.pack).toLowerCase().indexOf(q) < 0) return false;
+      return true;
+    });
+  }
+
+  function render() {
+    var rows = filtered(), h = '';
+    $('listsub').textContent = '共 ' + rows.length + ' 条' + (rows.length !== ROWS.length ? '（全部 ' + ROWS.length + '）' : '');
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i];
+      h += '<tr>'
+        + '<td class="mono cc" data-copy="' + BD.esc(r.license) + '">' + BD.esc(r.license) + '</td>'
+        + '<td class="dim">' + BD.esc(r.pack) + '</td>'
+        + '<td><span class="badge b-' + r.state + '">' + BD.esc(r.state_cn) + '</span></td>'
+        + '<td class="dim">' + BD.esc(r.owner_cn || '直营') + '</td>'
+        + '<td class="mono dim">' + BD.esc(r.device) + '</td>'
+        + '<td>' + (r.wxid !== '-' ? '<span class="chip">' + BD.esc(r.wxid) + '</span>' : '<span class="dim">—</span>') + '</td>'
+        + '<td class="dim r">' + BD.esc(r.at) + '</td>'
+        + '<td class="r"><div style="display:inline-flex;gap:6px">'
+        + (r.can_revoke ? '<button type="button" class="btn ghost sm" data-act="revoke" data-license="' + BD.esc(r.license) + '">封禁</button>' : '')
+        + '<button type="button" class="btn danger sm" data-act="del" data-license="' + BD.esc(r.license) + '">删除</button>'
+        + '</div></td></tr>';
+    }
+    document.getElementById('list').innerHTML = h || '<tr><td colspan="8" style="padding:24px"><div class="empty">没有匹配的卡密</div></td></tr>';
+  }
+
+  function syncURL() {
+    try {
+      var u = new URL(location.href);
+      F.state ? u.searchParams.set('state', F.state) : u.searchParams.delete('state');
+      F.owner ? u.searchParams.set('owner', F.owner) : u.searchParams.delete('owner');
+      F.q ? u.searchParams.set('q', F.q) : u.searchParams.delete('q');
+      history.replaceState(null, '', u.pathname + (u.search || ''));
+    } catch (e) {}
+  }
+
+  function load() {
+    BD.get('/admin/api/cards').then(function (j) {
+      if (j.code !== 0) { BD.toast('⚠ ' + j.msg); return; }
+      ROWS = j.data.rows; render();
+    });
+  }
+
+  /* 行内操作：点卡号复制 / 封禁 / 删除（事件委托，渲染后无需重新绑定） */
+  document.querySelector('table.tbl').addEventListener('click', function (e) {
+    var c = e.target.closest('.cc');
+    if (c) { BD.copy(c.getAttribute('data-copy'), c); return; }
+    var b = e.target.closest('[data-act]');
+    if (!b) return;
+    var lic = b.getAttribute('data-license'), r = null;
+    for (var i = 0; i < ROWS.length; i++) if (ROWS[i].license === lic) r = ROWS[i];
+    if (!r) return;
+    if (b.getAttribute('data-act') === 'revoke') {
+      if (!confirm('确认封禁 ' + lic + '？该用户下次打开微信，「' + r.pack + '」即失效')) return;
+      BD.api('/admin/api/cards/state', { license: lic }).then(function (j) {
+        if (j.code !== 0) { BD.toast('⚠ ' + j.msg); return; }
+        r.state = 'revoked'; r.state_cn = '已封禁'; r.can_revoke = false;
+        render(); BD.toast(j.msg);
+      });
+    } else {
+      var warn = r.state === 'active' ? '\n\n该卡已激活，删除后 ' + r.wxid + ' 的授权随即失效。' : '';
+      if (!confirm('确认删除 ' + lic + '？\n\n此操作立即删除卡密文件，不可恢复！' + warn)) return;
+      BD.api('/admin/api/cards/delete', { license: lic }).then(function (j) {
+        if (j.code !== 0) { BD.toast('⚠ ' + j.msg); return; }
+        ROWS.splice(ROWS.indexOf(r), 1);
+        render(); BD.toast(j.msg);
+      });
+    }
+  });
+
+  /* 筛选：即时生效 + 同步到地址栏 */
+  $('fstate').addEventListener('change', function () { F.state = this.value; render(); syncURL(); });
+  $('fowner').addEventListener('change', function () { F.owner = this.value; render(); syncURL(); });
+  var tmr = null;
+  $('fq').addEventListener('input', function () {
+    clearTimeout(tmr);
+    var v = this.value;
+    tmr = setTimeout(function () { F.q = v.trim(); render(); syncURL(); }, 200);
+  });
+
+  /* 生成卡密（异步）：成功后展示新码面板并补进列表 */
+  $('genform').addEventListener('submit', function (e) {
+    e.preventDefault();
+    var btn = $('genbtn');
+    btn.disabled = true; btn.textContent = '生成中…';
+    BD.api('/admin/api/cards/generate', { n: $('gen-n').value, pack: $('gen-pack').value, owner: $('gen-owner').value }).then(function (j) {
+      btn.disabled = false; btn.textContent = '生成';
+      if (j.code !== 0) { BD.toast('⚠ ' + j.msg); return; }
+      $('newpanel').hidden = false;
+      $('newsub').textContent = j.data.cards.length + ' 张，请立即复制保存';
+      $('newList').innerHTML = j.data.cards.map(function (c) { return '<span>' + BD.esc(c) + '</span>'; }).join('<br>');
+      $('copyAll').onclick = function () { BD.copy(j.data.cards.join('\n'), this); };
+      $('newpanel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+      BD.toast(j.msg);
+      load();
+    });
+  });
+
+  load();
+})();
+</script>
+{% endblock %}

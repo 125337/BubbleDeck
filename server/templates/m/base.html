@@ -1,0 +1,155 @@
+{% extends "base.html" %}
+{% block body %}
+<style>
+/* ────────────────────────────────
+   移动版布局（顶栏 + 行卡片化，零横滑）
+   独立于 PC 版，无任何共享布局样式
+   ──────────────────────────────── */
+.topbar{position:sticky;top:0;z-index:var(--z-sticky);background:var(--ink);color:#f4f2ee;
+  display:flex;align-items:center;gap:10px;padding:0 12px;height:52px}
+.topbar .logo{font-weight:700;font-size:13.5px;letter-spacing:.4px;white-space:nowrap}
+.topbar .logo i{font-style:normal;color:#8f8fe0}
+.topnav{display:flex;gap:2px;margin-left:auto}
+.topnav a{display:flex;align-items:center;justify-content:center;color:#b9b6ad;
+  font-size:12px;padding:8px 9px;border-radius:var(--r1);white-space:nowrap;min-height:36px}
+.topnav a.on{color:#fff;background:rgba(255,255,255,.09);box-shadow:inset 2px 0 0 #8a5ff0}
+.topnav a.out{color:#5c5a65;padding:8px 6px}
+
+.wrap{padding:18px 14px 44px}
+.brow{font-size:10.5px;letter-spacing:2.2px;color:var(--ink-3);text-transform:uppercase}
+.wrap h1{font-size:21px;font-weight:600;letter-spacing:-.02em;margin-top:4px}
+.wrap .sub{color:var(--ink-2);font-size:12.5px;margin-top:6px;line-height:1.65}
+.acts{display:flex;gap:8px;margin-top:14px}
+.acts .btn{flex:1}
+
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:38px;
+  padding:0 16px;border:1px solid transparent;border-radius:var(--r1);
+  background:var(--ink);color:#fff;font-size:13px;font-weight:500;font-family:inherit;cursor:pointer}
+.btn.ghost{background:var(--surface);border-color:var(--hair);color:var(--ink-2)}
+.btn.danger{background:var(--surface);border-color:#e8d3d3;color:var(--bad)}
+
+.metrics{display:grid;grid-template-columns:repeat(2,1fr);border-top:1px solid #d6d2c8;
+  border-bottom:1px solid #d6d2c8;margin-top:18px}
+.metric{padding:12px 10px 14px;border-bottom:1px solid var(--hair-2)}
+.metric:nth-last-child(-n+2){border-bottom:none}
+.metric:nth-child(odd){border-right:1px solid var(--hair-2)}
+.metric .k{display:flex;align-items:center;gap:6px;font-size:10.5px;letter-spacing:.11em;
+  text-transform:uppercase;color:var(--ink-3);white-space:nowrap}
+.metric .v{font-size:24px;font-weight:600;letter-spacing:-.03em;line-height:1;margin-top:8px;
+  font-variant-numeric:tabular-nums}
+
+.sect{margin-top:24px}
+.sect>h2{font-size:11px;letter-spacing:1.8px;color:var(--ink-3);text-transform:uppercase;margin-bottom:10px}
+.bcard{background:var(--surface);border:1px solid var(--hair);border-radius:10px;padding:12px 14px}
+.bcard+.bcard{margin-top:10px}
+.bcard .top{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.bcard .no{font-family:var(--mono);font-size:13.5px;font-weight:600;word-break:break-all;
+  border-bottom:1px dashed #d4cfc7;cursor:pointer}
+.bcard .pk{font-size:14px;font-weight:600;word-break:break-all}
+.bcard .ver{font-family:var(--mono);font-size:12px;color:var(--ink-3);font-weight:400}
+.kv{display:grid;grid-template-columns:64px 1fr;gap:5px 10px;margin-top:10px;font-size:12px;align-items:center}
+.kv em{font-style:normal;color:var(--ink-3)}
+.kv span{color:var(--ink-2);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.kv .mono{font-size:11.5px}
+.chip{display:inline-block;max-width:100%;padding:2px 9px;border-radius:99px;background:#f1efe9;
+  color:var(--ink-2);font-size:11.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ops{display:flex;gap:8px;margin-top:12px;padding-top:10px;border-top:1px dashed var(--hair-2)}
+.ops form{flex:1;display:flex}
+.ops .btn,.ops button{width:100%;min-height:36px;border-radius:7px;font-size:12.5px}
+.cc{cursor:pointer}
+
+.rlist{background:var(--surface);border:1px solid var(--hair);border-radius:10px;overflow:hidden}
+.rrow{padding:11px 14px;border-bottom:1px solid var(--hair-2)}
+.rrow:last-child{border-bottom:none}
+.rrow .l1{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.rrow .no{font-family:var(--mono);font-size:12.5px;font-weight:600;word-break:break-all;
+  border-bottom:1px dashed #d4cfc7;cursor:pointer}
+.rrow .l2{display:flex;justify-content:space-between;gap:8px;margin-top:4px;font-size:11.5px;
+  color:var(--ink-3);overflow:hidden}
+.rrow .l2 span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+.filters{display:flex;gap:7px;flex-wrap:wrap;margin-top:16px}
+.filters a{text-decoration:none;color:var(--ink-2);font-size:12.5px;border:1px solid var(--hair);
+  background:var(--surface);border-radius:99px;padding:8px 14px;display:flex;align-items:center;min-height:34px}
+.filters a.on{background:var(--ink);color:#f4f2ee;border-color:var(--ink)}
+.searchform{display:flex;gap:8px;margin-top:10px}
+.searchform input{flex:1;min-width:0;min-height:38px;border:1px solid var(--hair);border-radius:var(--r1);
+  padding:0 12px;font-size:13.5px;background:var(--surface);font-family:inherit;outline:none}
+.searchform input:focus{border-color:#a9a7d8;box-shadow:0 0 0 3px rgba(74,74,176,.09)}
+.searchform .btn{flex:none}
+
+.fgrid{display:grid;grid-template-columns:1fr;gap:12px}
+.fld{display:flex;flex-direction:column;gap:6px;min-width:0}
+.fld label{font-size:11.5px;color:var(--ink-3)}
+.fld input,.fld select{width:100%;min-height:40px;border:1px solid var(--hair);border-radius:var(--r1);
+  padding:0 12px;font-size:14px;background:var(--surface);color:var(--ink);font-family:inherit;outline:none}
+.fld input:focus,.fld select:focus{border-color:#a9a7d8;box-shadow:0 0 0 3px rgba(74,74,176,.09)}
+.filebox{display:block;border:1.5px dashed var(--hair);border-radius:10px;background:var(--surface);
+  padding:18px 12px;text-align:center;font-size:12.5px;color:var(--ink-2)}
+.filebox b{color:var(--ink);display:block;margin-bottom:3px;font-size:13px}
+.filebox input{position:absolute;width:1px;height:1px;opacity:0}
+.wfull{width:100%}
+.hint{color:var(--ink-3);font-size:11.5px;line-height:1.7;margin-top:12px}
+
+.statusrow{display:flex;flex-direction:column;gap:8px;margin-top:26px;padding-top:14px;
+  border-top:1px solid var(--hair);font-size:11.5px;color:var(--ink-3)}
+.statusrow em{font-style:normal;color:var(--ink-2);font-weight:500}
+.statusrow .live{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--ok);margin-right:5px}
+.statusrow .row{display:flex;gap:7px;align-items:center}
+
+.empty{background:var(--surface);border:1px solid var(--hair);border-radius:10px;
+  padding:32px 16px;text-align:center;color:var(--ink-3);font-size:12.5px}
+.generated{border-left:2px solid var(--accent);background:var(--surface-2);
+  padding:12px 14px;border-radius:0 var(--r1) var(--r1) 0}
+.generated .list{font-family:var(--mono);font-size:12.5px;line-height:1.95;user-select:all;
+  word-break:break-all;color:var(--ink)}
+.toast{position:fixed;top:62px;left:12px;right:12px;transform:translateY(-8px);opacity:0;
+  pointer-events:none;background:var(--ink);color:#f3f1ed;padding:11px 14px;
+  border-radius:10px;font-size:12.5px;box-shadow:0 10px 26px rgba(23,22,27,.3);
+  transition:opacity .22s,transform .22s;z-index:var(--z-toast)}
+.toast.show{opacity:1;transform:none}
+/* 上传流水线（packs 页，JS = /admin/static/upload.js） */
+.dropzone{display:flex;flex-direction:column;align-items:center;gap:6px;padding:26px 14px;
+  border:1.5px dashed var(--hair);border-radius:12px;text-align:center;cursor:pointer;
+  color:var(--ink-2);background:var(--surface-2);transition:border-color .15s,background .15s}
+.dropzone.over{border-color:var(--accent);background:var(--accent-soft)}
+.dropzone svg{width:26px;height:26px;color:var(--accent)}
+.dropzone b{color:var(--ink);font-size:14px}
+.dropzone span{font-size:12.5px}
+.queue{list-style:none;margin:12px 0 0;padding:0;display:flex;flex-direction:column;gap:8px}
+.qitem{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;
+  padding:10px 12px;border:1px solid var(--hair);border-left-width:3px;border-radius:8px;font-size:13px}
+.qitem.wait{border-left-color:var(--hair)}
+.qitem.run{border-left-color:var(--accent)} .qitem.run .qstat{color:var(--accent)}
+.qitem.ok{border-left-color:var(--ok)}
+.qitem.fail{border-left-color:var(--bad)}
+.qname{font-weight:550;word-break:break-all}
+.qmeta{display:flex;align-items:center;gap:6px;color:var(--ink-2);flex-wrap:wrap}
+.minibtn{border:1px solid var(--hair);background:var(--surface);color:var(--accent);border-radius:6px;
+  padding:6px 10px;font-size:12px;cursor:pointer;font-family:var(--ui)}
+.qver{width:80px;padding:7px 8px;border:1px solid var(--hair);border-radius:6px;
+  font-size:13px;font-family:var(--mono);background:var(--surface);color:var(--ink)}
+.qver:focus{border-color:var(--accent);outline:none}
+.batchbar{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;
+  margin-top:12px;padding:10px 12px;background:var(--surface-2);border-radius:8px}
+</style>
+
+<header class="topbar">
+  <span class="logo">Bubble<i>Deck</i></span>
+  <nav class="topnav">
+    <a href="/admin" class="{{ 'on' if active=='ov' }}">概览</a>
+    <a href="/admin/cards" class="{{ 'on' if active=='cards' }}">卡密</a>
+    <a href="/admin/packs" class="{{ 'on' if active=='packs' }}">包</a>
+    <a href="/admin/merchants" class="{{ 'on' if active=='merchants' }}">商家</a>
+    <a href="/admin/logout" class="out">退出</a>
+  </nav>
+</header>
+
+<div class="wrap">
+  {% block eyebrow %}<div class="brow">BubbleDeck Admin</div>{% endblock %}
+  <h1>{{ title }}</h1>
+  {% block sub %}{% endblock %}
+  <div class="acts">{% block acts %}{% endblock %}</div>
+  {% block content %}{% endblock %}
+</div>
+{% endblock %}

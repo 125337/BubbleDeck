@@ -1,0 +1,43 @@
+{% extends "biz/m/base.html" %}
+{% block acts %}
+<a class="btn ghost" href="/biz/packs">管理包</a>
+<a class="btn" href="/biz/cards">生成卡密</a>
+{% endblock %}
+{% block content %}
+<div class="metrics">
+{% for s in cards_stat %}
+  <div class="metric">
+    <div class="k"><span class="dot d-{{ s.tone }}"></span>{{ s.label }}</div>
+    <div class="v">{{ s.value }}</div>
+  </div>
+{% endfor %}
+</div>
+
+<section class="sect">
+  <h2>最近激活 · 最多 10 条</h2>
+  {% if recent %}
+  <div class="rlist">
+    {% for r in recent %}
+    <div class="rrow">
+      <div class="l1"><span class="no cc">{{ r.license }}</span><span class="mono dim">{{ r.at }}</span></div>
+      <div class="l2"><span>{{ r.wxid if r.wxid != '-' else '—' }}</span><span class="mono">{{ r.device }}</span></div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="empty">还没有卡密被激活</div>
+  {% endif %}
+</section>
+
+<div class="statusrow">
+  <span class="row"><span class="live"></span>授权 API <em>运行中</em></span>
+  <span class="row">包上架 <em>{{ packs_on }} / {{ packs_total }}</em></span>
+  <span class="row">授权模型 <em>V2 · 一包一码</em></span>
+  <span class="row">服务器时间 <em class="mono">{{ now }}</em></span>
+</div>
+{% endblock %}
+{% block script %}
+<script>
+document.querySelectorAll('.cc').forEach(function(el){bindCopy(el,el.textContent.trim())});
+</script>
+{% endblock %}

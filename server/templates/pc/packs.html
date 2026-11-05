@@ -1,0 +1,186 @@
+{% extends "pc/base.html" %}
+{% block sub %}<p>气泡包登记与上下架 · 网页直传 zip 自动打包（本站直链托管），key 仅在验签通过后下发</p>{% endblock %}
+{% block content %}
+<div class="stack">
+
+<section class="panel" id="uploadform">
+  <div class="phead2">
+    <h2>上传包<span class="sub">拖拽或选择 zip（可多选），逐个自动打包托管，默认下架</span></h2>
+  </div>
+  <div class="pbody">
+    <div id="dropzone" class="dropzone" role="button" tabindex="0" aria-label="选择 zip 文件上传">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M17 8l-5-5-5 5"/><path d="M12 3v12"/></svg>
+      <b>拖拽 zip 到这里，或点击选择</b>
+      <span>支持多选 · 单个 ≤20MB · 自动加密打包 + 登记 keys 表</span>
+      <input id="fileinput" type="file" accept=".zip,application/zip" multiple hidden>
+    </div>
+    <ul id="queue" class="queue" aria-live="polite"></ul>
+    <div id="batchbar" class="batchbar" hidden>
+      <span id="batchsum" class="dim"></span>
+      <button type="button" id="batchon" class="btn" hidden>一键上架本批成功包</button>
+    </div>
+    <p class="hint" style="margin-top:var(--s4)">包名 = zip 文件名（去 .zip），版本默认 1.0；同名同版本自动跳过。包裹层自动剥除、info.json 强制重写、密钥自动生成。上传成功可直接复制 key 与直链，检查后上架。</p>
+  </div>
+</section>
+
+<section class="panel" id="editform">
+  <div class="phead2">
+    <h2>{% if edit %}修改包：{{ edit.name }}<span class="sub">包名不可改，其余字段同名覆盖保存</span>{% else %}登记 / 更新包<span class="sub">同名包即覆盖更新</span>{% endif %}</h2>
+    {% if edit %}<a class="link" href="/admin/packs">取消编辑</a>{% endif %}
+  </div>
+  <div class="pbody">
+    <form id="upsform" method="post" action="/admin/api/packs/upsert" enctype="multipart/form-data" class="formgrid">
+      <div class="fld"><label for="p-name">包名</label>
+        <input id="p-name" type="text" name="name" placeholder="如 BDK_BUBBLE" required
+               value="{{ edit.name if edit else '' }}" {% if edit %}readonly style="background:var(--surface-2);color:var(--ink-2)"{% endif %}></div>
+      <div class="fld"><label for="p-ver">版本</label>
+        <input id="p-ver" type="text" name="version" placeholder="如 1.0.0" required
+               value="{{ edit.version if edit else '' }}"></div>
+      <div class="fld"><label for="p-size">大小（字节）</label>
+        <input id="p-size" type="number" name="size" placeholder="可留空"
+               value="{{ edit.size if edit and edit.size else '' }}"></div>
+      <div class="fld wide"><label for="p-url">下载直链 URL</label>
+        <input id="p-url" type="text" name="url" placeholder="GitHub Releases 直链地址" required
+               value="{{ edit.url if edit else '' }}"></div>
+      <div class="fld"><label for="p-key">容器密钥（v1=32位原文 / BDP2=base64 44字符）</label>
+        <input id="p-key" type="text" name="packkey" placeholder="pack.py 输出的 key" required
+               value="{{ edit.packkey if edit else '' }}"></div>
+      <div class="fld"><label for="p-md5">MD5</label>
+        <input id="p-md5" type="text" name="md5" placeholder="pack.py 输出的 md5" required
+               value="{{ edit.md5 if edit else '' }}"></div>
+      <div class="fld"><span class="act"><button type="submit" class="btn" id="upsbtn">{{ '保存修改' if edit else '保存' }}</button></span></div>
+    </form>
+    <p class="hint" style="margin-top:var(--s4)">{% if edit %}修改后立即生效，客户端下次拉取 /bd/packs 即拿到新值。{% else %}pack.py 打包完成后会打印以上全部参数，直接粘贴即可。也可以点列表中的「编辑」修改已有包的 MD5 / key / URL 等字段。{% endif %}</p>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="phead2">
+    <h2>包列表<span class="sub" id="listsub">加载中…</span></h2>
+    <form class="toolbar" id="filters" onsubmit="return false">
+      <select id="fstate" aria-label="状态筛选">
+        <option value="">全部状态</option>
+        <option value="on">仅上架</option>
+        <option value="off">仅下架</option>
+      </select>
+      <select id="fowner" aria-label="归属筛选">
+        <option value="">全部归属</option>
+        <option value="__none__">直营（无归属）</option>
+        {% for mo in merchants %}<option value="{{ mo.id }}">{{ mo.name }}</option>{% endfor %}
+      </select>
+      <input type="search" id="fq" placeholder="搜索包名" style="width:170px" aria-label="搜索包名">
+    </form>
+  </div>
+  <table class="tbl">
+    <thead>
+      <tr><th>包名</th><th>版本</th><th>大小</th><th>MD5</th><th>下载地址</th><th>状态</th><th>归属</th><th class="r">操作</th></tr>
+    </thead>
+    <tbody id="list"><tr><td colspan="8" style="padding:24px"><div class="empty">加载中…</div></td></tr></tbody>
+  </table>
+</section>
+
+</div>
+{% endblock %}
+{% block script %}
+<script src="/admin/static/admin.js"></script>
+<script src="/admin/static/upload.js"></script>
+<script>
+(function () {
+  var ROWS = [], F = { state: '', q: '', owner: '' };
+  function $(id) { return document.getElementById(id); }
+
+  function filtered() {
+    var q = F.q.toLowerCase();
+    return ROWS.filter(function (r) {
+      if (F.state && (F.state === 'on') !== r.on) return false;
+      if (F.owner === '__none__' && r.owner) return false;
+      if (F.owner && F.owner !== '__none__' && r.owner !== F.owner) return false;
+      if (q && r.name.toLowerCase().indexOf(q) < 0) return false;
+      return true;
+    });
+  }
+
+  function render() {
+    var rows = filtered(), h = '';
+    $('listsub').textContent = '共 ' + rows.length + ' 个' + (rows.length !== ROWS.length ? '（全部 ' + ROWS.length + '）' : '');
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i];
+      h += '<tr>'
+        + '<td class="mono">' + BD.esc(r.name) + '</td>'
+        + '<td class="mono">' + BD.esc(r.version) + '</td>'
+        + '<td class="dim">' + BD.esc(r.size_cn) + '</td>'
+        + '<td class="mono dim cc" data-copy="' + BD.esc(r.md5) + '">' + BD.esc(r.md5) + '</td>'
+        + '<td><a class="chip" href="' + BD.esc(r.url) + '" target="_blank" rel="noopener" title="' + BD.esc(r.url) + '">' + BD.esc(r.url) + '</a></td>'
+        + '<td><span class="badge ' + (r.on ? 'b-on' : 'b-off') + '">' + (r.on ? '上架' : '下架') + '</span></td>'
+        + '<td class="dim">' + BD.esc(r.owner_cn || '直营') + '</td>'
+        + '<td class="r"><div style="display:inline-flex;gap:6px">'
+        + '<a class="btn ghost sm" href="/admin/packs?edit=' + encodeURIComponent(r.name) + '#editform">编辑</a>'
+        + '<button type="button" class="btn ' + (r.on ? 'ghost ' : '') + 'sm" data-act="toggle" data-name="' + BD.esc(r.name) + '">' + (r.on ? '下架' : '上架') + '</button>'
+        + '<button type="button" class="btn ghost sm" data-act="del" data-name="' + BD.esc(r.name) + '">删除</button>'
+        + '</div></td></tr>';
+    }
+    $('list').innerHTML = h || '<tr><td colspan="8" style="padding:24px"><div class="empty">还没有登记任何包</div></td></tr>';
+  }
+
+  function load() {
+    BD.get('/admin/api/packs').then(function (j) {
+      if (j.code !== 0) { BD.toast('⚠ ' + j.msg); return; }
+      ROWS = j.data.rows; render();
+    });
+  }
+  window.BDList = { refresh: load };   // 上传流水线完成后刷新列表
+
+  /* 行内操作：点 MD5 复制 / 上下架 / 删除 */
+  document.querySelector('table.tbl').addEventListener('click', function (e) {
+    var c = e.target.closest('.cc');
+    if (c) { BD.copy(c.getAttribute('data-copy'), c); return; }
+    var b = e.target.closest('[data-act]');
+    if (!b) return;
+    var name = b.getAttribute('data-name'), r = null;
+    for (var i = 0; i < ROWS.length; i++) if (ROWS[i].name === name) r = ROWS[i];
+    if (!r) return;
+    if (b.getAttribute('data-act') === 'toggle') {
+      var to = r.on ? 'off' : 'on';
+      BD.api('/admin/api/packs/state', { name: name, state: to }).then(function (j) {
+        if (j.code !== 0) { BD.toast('⚠ ' + j.msg); return; }
+        r.on = (to === 'on'); render(); BD.toast(j.msg);
+      });
+    } else {
+      if (!confirm('确认删除包「' + name + '」？\n\n登记、密钥、包文件将一并移除，不可恢复！\n若还有卡密挂在它上面，删除会被拒绝。')) return;
+      BD.api('/admin/api/packs/delete', { name: name }).then(function (j) {
+        if (j.code !== 0) { BD.toast('⚠ ' + j.msg); return; }
+        ROWS.splice(ROWS.indexOf(r), 1); render(); BD.toast(j.msg);
+      });
+    }
+  });
+
+  /* 筛选 */
+  $('fstate').addEventListener('change', function () { F.state = this.value; render(); });
+  $('fowner').addEventListener('change', function () { F.owner = this.value; render(); });
+  var tmr = null;
+  $('fq').addEventListener('input', function () {
+    clearTimeout(tmr);
+    var v = this.value;
+    tmr = setTimeout(function () { F.q = v.trim(); render(); }, 200);
+  });
+
+  /* 登记/编辑（异步） */
+  $('upsform').addEventListener('submit', function (e) {
+    e.preventDefault();
+    var btn = $('upsbtn');
+    btn.disabled = true;
+    BD.api('/admin/api/packs/upsert', {
+      name: $('p-name').value, version: $('p-ver').value, size: $('p-size').value,
+      url: $('p-url').value, packkey: $('p-key').value, md5: $('p-md5').value
+    }).then(function (j) {
+      btn.disabled = false;
+      if (j.code !== 0) { BD.toast('⚠ ' + j.msg); return; }
+      BD.toast(j.msg);
+      load();
+    });
+  });
+
+  load();
+})();
+</script>
+{% endblock %}

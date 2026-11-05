@@ -1,20 +1,20 @@
 #
-# BubbleDeck 授权 API（V3）
-# 两业务接口：activate / packs，外加 ping。HMAC-SHA256 请求签名校验。
+# BubbleDeck 授权 API（V4：客户端零秘密）
+# 两业务接口：activate / packs，外加 ping。无请求签名校验（dylib 零秘密，
+# 防护 = HTTPS + 限频 + 卡密 16 位熵 + wxid 绑定业务逻辑，见 docs/授权系统方案.md §信任模型）。
 # 存储：卡密 = 按卡一文件 licenses/<卡密>.json；包 = SQLite（packs + keys 两表）
-# 限频：实例内存滑动窗口（activate 20 次/时 → 1007；packs 60 次/时 → 429）
+# 限频：实例内存滑动窗口（activate 100 次/时 → 1007；packs 120 次/时 → 429）
 # 契约见 docs/授权系统方案.md §三
 #
 # 运行：uvicorn app:app --host 127.0.0.1 --port 8000
-# 环境变量：BD_SALT（签名盐，必配）  BD_DB（SQLite 路径，默认同目录 bd.db）
+# 环境变量：BD_DB（SQLite 路径，默认同目录 bd.db）
 #           BD_LICENSES_DIR（卡密文件目录，默认同目录 licenses/）
+# 后台/商家会话密钥见 session.py（BD_ADMIN_SECRET / BD_BIZ_SECRET）
 #
 
 import os
 import json
 import time
-import hmac
-import hashlib
 import sqlite3
 
 from fastapi import FastAPI, Request
@@ -23,11 +23,9 @@ from fastapi.responses import JSONResponse
 BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
 DB_PATH    = os.environ.get("BD_DB", os.path.join(BASE_DIR, "bd.db"))
 CARDS_DIR  = os.environ.get("BD_LICENSES_DIR", os.path.join(BASE_DIR, "licenses"))
-SALT       = os.environ.get("BD_SALT", "bd-dev-salt")     # 生产部署必须覆盖
-TS_WINDOW_MS = 300_000                                    # 签名时间窗 ±300s
 
-ACTIVATE_HOURLY = 20                                      # 同 device_id|IP 每小时
-PACKS_HOURLY    = 60
+ACTIVATE_HOURLY = 100                                     # 同 device_id|IP 每小时（买 30 个包一次激活够用）
+PACKS_HOURLY    = 120
 
 app = FastAPI()
 
@@ -58,23 +56,19 @@ def init_db():
             ver     INTEGER NOT NULL DEFAULT 2,           -- 容器版本（2=BDP2）
             PRIMARY KEY(pack, version)
         );
+        CREATE TABLE IF NOT EXISTS merchants(             -- B 端商家账号（biz.py 用）
+            id        INTEGER PRIMARY KEY AUTOINCREMENT,
+            username  TEXT NOT NULL UNIQUE,
+            pass_hash TEXT NOT NULL,                      -- pbkdf2: salt$hex
+            shop      TEXT NOT NULL DEFAULT '',
+            state     TEXT NOT NULL DEFAULT 'on',         -- on/off
+            created   INTEGER NOT NULL DEFAULT 0
+        );
         """)
-
-# ────── 签名校验 ──────
-
-def check_sign(ts: str, sign: str, body: bytes):
-    if not ts or not sign:
-        return 4001
-    try:
-        ts_ms = int(ts)
-    except ValueError:
-        return 1004
-    if abs(int(time.time() * 1000) - ts_ms) > TS_WINDOW_MS:
-        return 4002
-    expect = hmac.new(SALT.encode(), f"{ts}|".encode() + body, hashlib.sha256).hexdigest()
-    if not hmac.compare_digest(expect, sign):
-        return 4003
-    return None
+        # 轻量迁移：packs 补 owner 列（'' = 平台直营；B 端商家归属）
+        cols = {r[1] for r in c.execute("PRAGMA table_info(packs)").fetchall()}
+        if "owner" not in cols:
+            c.execute("ALTER TABLE packs ADD COLUMN owner TEXT NOT NULL DEFAULT ''")
 
 # ────── 限频（实例内存，重启清零即可） ──────
 
@@ -122,8 +116,6 @@ def resp(code=0, msg="ok", data=None):
 @app.post("/bd/activate")
 async def activate(request: Request):
     body = await request.body()
-    if err := check_sign(request.headers.get("X-BD-Ts"), request.headers.get("X-BD-Sign"), body):
-        return resp(err, "签名校验失败")
     try:
         j = json.loads(body)
         license_key, device, wxid = j["license"], j["device_id"], j["wxid"]
@@ -151,8 +143,6 @@ async def activate(request: Request):
 @app.post("/bd/packs")
 async def packs(request: Request):
     body = await request.body()
-    if err := check_sign(request.headers.get("X-BD-Ts"), request.headers.get("X-BD-Sign"), body):
-        return resp(err, "签名校验失败")
     try:
         j = json.loads(body)
         device, wxid = j["device_id"], j["wxid"]
@@ -183,10 +173,10 @@ async def packs(request: Request):
             if item["owned"]:
                 k = c.execute("SELECT packkey, ver FROM keys WHERE pack=? AND version=?",
                               (r["name"], r["version"])).fetchone()
-                if k:                                   # BDP2 密钥（base64 32B）
+                if k:                                   # 密钥只认 keys 表（BDP2: ver=2）
                     item["key"], item["ver"] = k["packkey"], k["ver"]
-                else:                                   # 遗留 v1 容器（CBC，32 字符原文）
-                    item["key"], item["ver"] = r["packkey"], 1
+                else:                                   # keys 表无记录 → 不下发
+                    item["key"], item["ver"] = None, None
             else:
                 item["key"], item["ver"] = None, None
             out.append(item)
@@ -197,3 +187,8 @@ async def ping():
     return resp(data={"service": "BubbleDeck", "time": int(time.time())})
 
 init_db()
+
+from admin import router as admin_router
+app.include_router(admin_router)
+from biz import router as biz_router
+app.include_router(biz_router)

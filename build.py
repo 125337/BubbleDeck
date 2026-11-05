@@ -24,7 +24,7 @@ VERIFY_U8  = ['BubbleDeck', 'TDBubbleEntry', 'TDBubbleEngine', 'TDPackLoader',
               'TDConfig', 'MMThemeManager', 'ChatRoom_Bubble_', 'bubbleImageForName',
               'imageNamed:warnIfNotFound:', 'BubbleDeckEntryVC', 'WCPluginsMgr',
               '_Dark', 'TDNet', 'TDLicense', 'TDZip', 'qb.xhhan.xyz',
-              'X-BD-Sign', 'BDPK', 'installBdpackData', 'refreshEntitlements',
+              'BDPK', 'installBdpackData', 'refreshEntitlements',
               'gateOpenForPack', 'setPackSource', 'pluginEnabled',
               'BDP2', 'TDContainer', 'pack.bdpack', 'bdpack2|', 'CCCryptorGCMOneshotDecrypt']
 VERIFY_U16 = ['气泡包', '微信默认', '使用中', '日志记录', '重新加载', '本地气泡引擎',

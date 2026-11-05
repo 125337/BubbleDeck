@@ -1,0 +1,164 @@
+{% extends "biz/pc/base.html" %}
+{% block sub %}<p>气泡包登记与上下架 · 网页直传 zip 自动打包（本站直链托管），key 仅在验签通过后下发</p>{% endblock %}
+{% block content %}
+<div class="stack">
+
+<section class="panel" id="uploadform">
+  <div class="phead2">
+    <h2>上传包<span class="sub">拖拽或选择 zip（可多选），逐个自动打包托管，默认下架</span></h2>
+  </div>
+  <div class="pbody">
+    <div id="dropzone" class="dropzone" role="button" tabindex="0" aria-label="选择 zip 文件上传">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M17 8l-5-5-5 5"/><path d="M12 3v12"/></svg>
+      <b>拖拽 zip 到这里，或点击选择</b>
+      <span>支持多选 · 单个 ≤20MB · 自动加密打包 + 登记 keys 表</span>
+      <input id="fileinput" type="file" accept=".zip,application/zip" multiple hidden>
+    </div>
+    <ul id="queue" class="queue" aria-live="polite"></ul>
+    <div id="batchbar" class="batchbar" hidden>
+      <span id="batchsum" class="dim"></span>
+      <button type="button" id="batchon" class="btn" hidden>一键上架本批成功包</button>
+    </div>
+    <p class="hint" style="margin-top:var(--s4)">包名 = zip 文件名（去 .zip），版本默认 1.0；同名同版本自动跳过。包裹层自动剥除、info.json 强制重写、密钥自动生成。上传成功可直接复制 key 与直链，检查后上架。</p>
+  </div>
+</section>
+
+<section class="panel" id="editform">
+  <div class="phead2">
+    <h2>修改包版本<span class="sub">新包请用上方上传入口；此处仅改版本号，直链 / 文件 / 密钥由平台托管</span></h2>
+    {% if edit %}<a class="link" href="/biz/packs">取消编辑</a>{% endif %}
+  </div>
+  <div class="pbody">
+    <form id="upsform" method="post" action="/biz/api/packs/upsert" enctype="multipart/form-data" class="formgrid">
+      <div class="fld"><label for="p-name">包名</label>
+        <input id="p-name" type="text" name="name" placeholder="要修改的包名" required
+               value="{{ edit.name if edit else '' }}"></div>
+      <div class="fld"><label for="p-ver">新版本</label>
+        <input id="p-ver" type="text" name="version" placeholder="如 2.0.0" required
+               value="{{ edit.version if edit else '' }}"></div>
+      <div class="fld"><span class="act"><button type="submit" class="btn" id="upsbtn">保存</button></span></div>
+    </form>
+    <p class="hint" style="margin-top:var(--s4)">改版本仅更新版本号：包文件自动重签（密钥不变），下载直链保持不变。需要更换包内容请重新上传 zip（同名可改版本重传）。</p>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="phead2">
+    <h2>包列表<span class="sub" id="listsub">加载中…</span></h2>
+    <form class="toolbar" id="filters" onsubmit="return false">
+      <select id="fstate" aria-label="状态筛选">
+        <option value="">全部状态</option>
+        <option value="on">仅上架</option>
+        <option value="off">仅下架</option>
+      </select>
+      <input type="search" id="fq" placeholder="搜索包名" style="width:170px" aria-label="搜索包名">
+    </form>
+  </div>
+  <table class="tbl">
+    <thead>
+      <tr><th>包名</th><th>版本</th><th>大小</th><th>MD5</th><th>下载地址</th><th>状态</th><th class="r">操作</th></tr>
+    </thead>
+    <tbody id="list"><tr><td colspan="7" style="padding:24px"><div class="empty">加载中…</div></td></tr></tbody>
+  </table>
+</section>
+
+</div>
+{% endblock %}
+{% block script %}
+<script src="/admin/static/admin.js"></script>
+<script src="/admin/static/upload.js"></script>
+<script>
+(function () {
+  var ROWS = [], F = { state: '', q: '' };
+  function $(id) { return document.getElementById(id); }
+
+  function filtered() {
+    var q = F.q.toLowerCase();
+    return ROWS.filter(function (r) {
+      if (F.state && (F.state === 'on') !== r.on) return false;
+      if (q && r.name.toLowerCase().indexOf(q) < 0) return false;
+      return true;
+    });
+  }
+
+  function render() {
+    var rows = filtered(), h = '';
+    $('listsub').textContent = '共 ' + rows.length + ' 个' + (rows.length !== ROWS.length ? '（全部 ' + ROWS.length + '）' : '');
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i];
+      h += '<tr>'
+        + '<td class="mono">' + BD.esc(r.name) + '</td>'
+        + '<td class="mono">' + BD.esc(r.version) + '</td>'
+        + '<td class="dim">' + BD.esc(r.size_cn) + '</td>'
+        + '<td class="mono dim cc" data-copy="' + BD.esc(r.md5) + '">' + BD.esc(r.md5) + '</td>'
+        + '<td><a class="chip" href="' + BD.esc(r.url) + '" target="_blank" rel="noopener" title="' + BD.esc(r.url) + '">' + BD.esc(r.url) + '</a></td>'
+        + '<td><span class="badge ' + (r.on ? 'b-on' : 'b-off') + '">' + (r.on ? '上架' : '下架') + '</span></td>'
+        + '<td class="r"><div style="display:inline-flex;gap:6px">'
+        + '<a class="btn ghost sm" href="/biz/packs?edit=' + encodeURIComponent(r.name) + '#editform">编辑</a>'
+        + '<button type="button" class="btn ' + (r.on ? 'ghost ' : '') + 'sm" data-act="toggle" data-name="' + BD.esc(r.name) + '">' + (r.on ? '下架' : '上架') + '</button>'
+        + '<button type="button" class="btn ghost sm" data-act="del" data-name="' + BD.esc(r.name) + '">删除</button>'
+        + '</div></td></tr>';
+    }
+    $('list').innerHTML = h || '<tr><td colspan="7" style="padding:24px"><div class="empty">还没有登记任何包</div></td></tr>';
+  }
+
+  function load() {
+    BD.get('/biz/api/packs').then(function (j) {
+      if (j.code !== 0) { BD.toast('⚠ ' + j.msg); return; }
+      ROWS = j.data.rows; render();
+    });
+  }
+  window.BDList = { refresh: load };   // 上传流水线完成后刷新列表
+
+  /* 行内操作：点 MD5 复制 / 上下架 / 删除 */
+  document.querySelector('table.tbl').addEventListener('click', function (e) {
+    var c = e.target.closest('.cc');
+    if (c) { BD.copy(c.getAttribute('data-copy'), c); return; }
+    var b = e.target.closest('[data-act]');
+    if (!b) return;
+    var name = b.getAttribute('data-name'), r = null;
+    for (var i = 0; i < ROWS.length; i++) if (ROWS[i].name === name) r = ROWS[i];
+    if (!r) return;
+    if (b.getAttribute('data-act') === 'toggle') {
+      var to = r.on ? 'off' : 'on';
+      BD.api('/biz/api/packs/state', { name: name, state: to }).then(function (j) {
+        if (j.code !== 0) { BD.toast('⚠ ' + j.msg); return; }
+        r.on = (to === 'on'); render(); BD.toast(j.msg);
+      });
+    } else {
+      if (!confirm('确认删除包「' + name + '」？\n\n登记、密钥、包文件将一并移除，不可恢复！\n若还有卡密挂在它上面，删除会被拒绝。')) return;
+      BD.api('/biz/api/packs/delete', { name: name }).then(function (j) {
+        if (j.code !== 0) { BD.toast('⚠ ' + j.msg); return; }
+        ROWS.splice(ROWS.indexOf(r), 1); render(); BD.toast(j.msg);
+      });
+    }
+  });
+
+  /* 筛选 */
+  $('fstate').addEventListener('change', function () { F.state = this.value; render(); });
+  var tmr = null;
+  $('fq').addEventListener('input', function () {
+    clearTimeout(tmr);
+    var v = this.value;
+    tmr = setTimeout(function () { F.q = v.trim(); render(); }, 200);
+  });
+
+  /* 改版本（异步） */
+  $('upsform').addEventListener('submit', function (e) {
+    e.preventDefault();
+    var btn = $('upsbtn');
+    btn.disabled = true;
+    BD.api('/biz/api/packs/upsert', {
+      name: $('p-name').value, version: $('p-ver').value
+    }).then(function (j) {
+      btn.disabled = false;
+      if (j.code !== 0) { BD.toast('⚠ ' + j.msg); return; }
+      BD.toast(j.msg);
+      load();
+    });
+  });
+
+  load();
+})();
+</script>
+{% endblock %}

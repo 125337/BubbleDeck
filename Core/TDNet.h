@@ -2,11 +2,10 @@
 //  TDNet.h
 //  BubbleDeck
 //
-//  授权 API 网络层：统一 HMAC 签名 + JSON POST。
+//  授权 API 网络层：纯 HTTPS + JSON POST（V4 客户端零秘密：无内置密钥、无请求签名）。
 //  契约见 docs/授权系统方案.md：
-//    请求头 X-BD-Ts（毫秒时间戳）
-//    请求头 X-BD-Sign = HMAC-SHA256(SALT, "{ts}|{body}")，服务端校验 ±300s
 //    响应 { "code": 0, "msg": "ok", "data": {...} }
+//    防护在服务器侧：限频 + 卡密熵 + wxid 绑定业务逻辑
 //
 
 #import <Foundation/Foundation.h>

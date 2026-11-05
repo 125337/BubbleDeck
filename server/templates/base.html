@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>{{ title }} · BubbleDeck</title>
+<style>
+/* ────────────────────────────────
+   共享层：仅设计令牌 + 基础规则
+   PC 布局 → pc/base.html
+   移动布局 → m/base.html
+   ──────────────────────────────── */
+:root{
+  /* 色板：暖纸底 + 近黑墨 + 去饱和靛蓝强调 */
+  --paper:#f4f2ee; --surface:#ffffff; --surface-2:#faf9f6;
+  --ink:#17161b; --ink-2:#65636c; --ink-3:#98959d;
+  --hair:#e3dfd9; --hair-2:#efece7;
+  --accent:#4a4ab0; --accent-soft:#eeeefa;
+  --ok:#2c7a4e; --ok-soft:#eaf4ee;
+  --bad:#b03a3a; --bad-soft:#fbeeee;
+  --warn:#9c6714; --warn-soft:#faf1e2;
+  --info:#196b80;
+  /* 间距刻度（4 的倍数） */
+  --s1:4px; --s2:8px; --s3:12px; --s4:16px; --s5:24px; --s6:32px; --s7:48px; --s8:64px;
+  /* 圆角 / 层级 */
+  --r1:6px; --r2:8px;
+  --z-sticky:20; --z-toast:60;
+  /* 字体 */
+  --ui:system-ui,-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Consolas,monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:var(--ui);background:var(--paper);color:var(--ink);font-size:14px;
+  -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+a{color:inherit;text-decoration:none}
+svg{display:block}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:var(--r1)}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+.mono{font-family:var(--mono);font-size:12px;letter-spacing:.01em;font-variant-numeric:tabular-nums}
+.dim{color:var(--ink-3)}
+.badge{display:inline-flex;align-items:center;gap:5px;padding:2px 8px;border-radius:var(--r1);
+  font-size:11.5px;font-weight:500;white-space:nowrap}
+.badge::before{content:"";width:4px;height:4px;border-radius:50%;background:currentColor}
+.b-unused{background:#f2f0eb;color:var(--ink-2)}
+.b-active{background:var(--ok-soft);color:var(--ok)}
+.b-revoked{background:var(--bad-soft);color:var(--bad)}
+.b-on{background:var(--ok-soft);color:var(--ok)}
+.b-off{background:#f2f0eb;color:var(--ink-2)}
+.dot{width:5px;height:5px;border-radius:50%;flex:none}
+.d-indigo{background:var(--accent)} .d-gray{background:#b3b0b8}
+.d-green{background:var(--ok)} .d-red{background:var(--bad)}
+.d-cyan{background:var(--info)} .d-amber{background:var(--warn)}
+</style>
+</head>
+<body{% block bodyattr %}{% endblock %}>
+{% block body %}{% endblock %}
+{% if flash %}<div class="toast" id="toast" role="status">{{ flash }}</div>{% endif %}
+<script>
+function copyTxt(t){
+  if(navigator.clipboard&&window.isSecureContext){return navigator.clipboard.writeText(t)}
+  var x=document.createElement('textarea');x.value=t;x.style.position='fixed';x.style.opacity='0';
+  document.body.appendChild(x);x.select();try{document.execCommand('copy')}finally{document.body.removeChild(x)}
+  return Promise.resolve();
+}
+function bindCopy(el,t){el.addEventListener('click',function(ev){
+  if(el.tagName==='A'){ev.preventDefault()}
+  copyTxt(t).then(function(){
+    if(el.tagName==='BUTTON'){var o=el.textContent;el.textContent='已复制';setTimeout(function(){el.textContent=o},1300)}
+    else{el.style.color='#2c7a4e';setTimeout(function(){el.style.color=''},1300)}
+  })
+})}
+(function(){var t=document.getElementById('toast');if(t){requestAnimationFrame(function(){t.classList.add('show')});
+  setTimeout(function(){t.classList.remove('show')},3000);
+  try{var u=new URL(location.href),ch=false;          /* 一次性参数已展示，剥掉防刷新复现 */
+    ['msg','new'].forEach(function(k){if(u.searchParams.has(k)){u.searchParams.delete(k);ch=true}});
+    if(ch)history.replaceState(null,'',u.pathname+u.search+u.hash)}catch(e){}}
+})();
+</script>
+{% block script %}{% endblock %}
+</body>
+</html>

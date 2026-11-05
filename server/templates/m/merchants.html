@@ -1,0 +1,102 @@
+{% extends "m/base.html" %}
+{% block content %}
+
+<section class="sect">
+  <h2>创建商家</h2>
+  <div class="bcard">
+    <form id="mform" class="fgrid" onsubmit="return false">
+      <div class="fld"><label for="m-username">登录账号</label>
+        <input id="m-username" placeholder="3-24 位字母/数字/下划线" autocapitalize="off"></div>
+      <div class="fld"><label for="m-shop">店名（选填）</label>
+        <input id="m-shop" placeholder="如：某宝旗舰店"></div>
+      <button type="submit" class="btn wfull" id="m-create">创建商家</button>
+    </form>
+    <div id="pw-panel" hidden style="margin-top:10px">
+      <p><strong id="pw-title"></strong></p>
+      <p class="mono cc" id="pw-value" style="font-size:16px"></p>
+      <p class="dim" style="font-size:12px">仅显示一次。商家端入口：qb.xhhan.xyz/biz</p>
+    </div>
+  </div>
+</section>
+
+<section class="sect">
+  <h2>商家列表</h2>
+  <div class="rlist" id="list"><div class="empty">加载中…</div></div>
+</section>
+{% endblock %}
+
+{% block script %}
+<script src="/admin/static/admin.js"></script>
+<script>
+  var ROWS = [];
+  function $(id) { return document.getElementById(id); }
+
+  function render() {
+    var h = '';
+    for (var i = 0; i < ROWS.length; i++) {
+      var r = ROWS[i];
+      h += '<div class="bcard">'
+        + '<div class="top"><span class="pk">' + BD.esc(r.username) + (r.shop ? ' <span class="ver">' + BD.esc(r.shop) + '</span>' : '') + '</span>'
+        + '<span class="badge ' + (r.on ? 'b-on' : 'b-off') + '">' + (r.on ? '启用' : '停用') + '</span></div>'
+        + '<div class="kv"><em>创建于</em><span>' + BD.esc(r.created) + '</span></div>'
+        + '<div class="ops">'
+        + '<button type="button" data-act="reset" data-id="' + r.id + '">重置密码</button>'
+        + '<button type="button" class="ghost" data-act="toggle" data-id="' + r.id + '" data-on="' + r.on + '">' + (r.on ? '停用' : '启用') + '</button>'
+        + '</div></div>';
+    }
+    $('list').innerHTML = h || '<div class="empty">还没有商家，先在上方创建</div>';
+  }
+
+  function load() {
+    BD.get('/admin/api/merchants').then(function (j) {
+      if (j.code !== 0) { BD.toast('⚠ ' + j.msg); return; }
+      ROWS = j.data.rows; render();
+    });
+  }
+
+  function showPw(title, pw) {
+    $('pw-panel').hidden = false;
+    $('pw-title').textContent = title;
+    $('pw-value').textContent = pw;
+    $('pw-value').setAttribute('data-copy', pw);
+    $('pw-panel').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+
+  $('mform').addEventListener('submit', function (e) {
+    e.preventDefault();
+    BD.api('/admin/api/merchants/create', { username: $('m-username').value.trim(), shop: $('m-shop').value.trim() }).then(function (j) {
+      if (j.code !== 0) { BD.toast('⚠ ' + j.msg); return; }
+      BD.toast(j.msg);
+      showPw('商家 ' + j.data.username + ' 的初始密码', j.data.password);
+      $('m-username').value = ''; $('m-shop').value = '';
+      load();
+    });
+  });
+
+  $('list').addEventListener('click', function (e) {
+    var b = e.target.closest('[data-act]');
+    if (!b) return;
+    var id = b.getAttribute('data-id');
+    if (b.getAttribute('data-act') === 'reset') {
+      if (!confirm('重置该商家的登录密码？')) return;
+      BD.api('/admin/api/merchants/reset', { id: id }).then(function (j) {
+        if (j.code !== 0) { BD.toast('⚠ ' + j.msg); return; }
+        showPw('新密码', j.data.password);
+        BD.toast(j.msg);
+      });
+    } else {
+      var to = b.getAttribute('data-on') === 'true' ? 'off' : 'on';
+      BD.api('/admin/api/merchants/state', { id: id, state: to }).then(function (j) {
+        if (j.code !== 0) { BD.toast('⚠ ' + j.msg); return; }
+        BD.toast(j.msg); load();
+      });
+    }
+  });
+
+  $('pw-panel').addEventListener('click', function (e) {
+    if (e.target.id === 'pw-value') BD.copy(e.target.getAttribute('data-copy'), e.target);
+  });
+
+  load();
+</script>
+{% endblock %}
